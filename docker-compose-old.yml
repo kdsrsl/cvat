@@ -88,10 +88,6 @@ services:
       cvat_opa:
         condition:
           service_started
-    build:
-      context: .
-      args:
-        - BUILD_DATE=${CURRENT_TIMESTAMP}
     environment:
       <<: [*backend-env, *clickhouse-env]
       DJANGO_MODWSGI_EXTRA_ARGS: ''
@@ -254,10 +250,6 @@ services:
     restart: always
     depends_on:
       - cvat_server
-    build:
-      context: .
-      args:
-        - BUILD_DATE=${CURRENT_TIMESTAMP}
     labels:
       traefik.enable: "true"
       traefik.http.services.cvat-ui.loadbalancer.server.port: "80"
