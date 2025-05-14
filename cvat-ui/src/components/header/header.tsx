@@ -380,20 +380,20 @@ function HeaderComponent(props: Props): JSX.Element {
         ],
     }, 10]);
 
-    menuItems.push([{
-        key: 'settings',
-        icon: <SettingOutlined />,
-        onClick: () => switchSettingsModalVisible(true),
-        title: `Press ${switchSettingsShortcut} to switch`,
-        label: 'Settings',
-    }, 20]);
+    // menuItems.push([{
+    //     key: 'settings',
+    //     icon: <SettingOutlined />,
+    //     onClick: () => switchSettingsModalVisible(true),
+    //     title: `Press ${switchSettingsShortcut} to switch`,
+    //     label: 'Settings',
+    // }, 20]);
 
-    menuItems.push([{
-        key: 'about',
-        icon: <InfoCircleOutlined />,
-        onClick: () => showAboutModal(),
-        label: 'About',
-    }, 30]);
+    // menuItems.push([{
+    //     key: 'about',
+    //     icon: <InfoCircleOutlined />,
+    //     onClick: () => showAboutModal(),
+    //     label: 'About',
+    // }, 30]);
 
     if (renderChangePasswordItem) {
         menuItems.push([{
@@ -477,7 +477,7 @@ function HeaderComponent(props: Props): JSX.Element {
                         history.push('/cloudstorages');
                     }}
                 >
-                    Cloud Storages
+
                 </Button>
                 <Button
                     className={getButtonClassName('requests')}
@@ -489,7 +489,7 @@ function HeaderComponent(props: Props): JSX.Element {
                         history.push('/requests');
                     }}
                 >
-                    Requests
+
                 </Button>
                 {isModelsPluginActive ? (
                     <Button
@@ -520,32 +520,8 @@ function HeaderComponent(props: Props): JSX.Element {
                 ) : null}
             </div>
             <div className='cvat-right-header'>
-                <CVATTooltip overlay='Click to open repository'>
-                    <Button
-                        icon={<GithubOutlined />}
-                        size='large'
-                        className='cvat-open-repository-button cvat-header-button'
-                        type='link'
-                        href={GITHUB_URL}
-                        onClick={(event: React.MouseEvent): void => {
-                            event.preventDefault();
-                            window.open(GITHUB_URL, '_blank');
-                        }}
-                    />
-                </CVATTooltip>
-                <CVATTooltip overlay='Click to open guide'>
-                    <Button
-                        icon={<QuestionCircleOutlined />}
-                        size='large'
-                        className='cvat-open-guide-button cvat-header-button'
-                        type='link'
-                        href={GUIDE_URL}
-                        onClick={(event: React.MouseEvent): void => {
-                            event.preventDefault();
-                            window.open(GUIDE_URL, '_blank');
-                        }}
-                    />
-                </CVATTooltip>
+
+
                 <Dropdown
                     trigger={['click']}
                     destroyPopupOnHide

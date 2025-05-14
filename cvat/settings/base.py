@@ -760,5 +760,5 @@ TMP_FILE_OR_DIR_RETENTION_DAYS = 3
 
 LOGO_FILENAME = "logo.svg"
 ABOUT_INFO = {
-    "subtitle": "Open Data Annotation Platform",
+    "subtitle": "图像标注平台",
 }
