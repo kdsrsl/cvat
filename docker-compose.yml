@@ -254,10 +254,6 @@ services:
     restart: always
     depends_on:
       - cvat_server
-    build:
-      context: .
-      args:
-        - BUILD_DATE=${CURRENT_TIMESTAMP}
     labels:
       traefik.enable: "true"
       traefik.http.services.cvat-ui.loadbalancer.server.port: "80"
