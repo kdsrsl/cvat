@@ -83,6 +83,7 @@ ARG CVAT_CONFIGURATION="production"
 RUN --mount=type=cache,target=/root/.cache/pip/http-v2 \
     DATUMARO_HEADLESS=1 python3 -m pip wheel --no-deps --no-binary lxml,xmlsec \
     -r /tmp/cvat/requirements/${CVAT_CONFIGURATION}.txt \
+    -i https://mirrors.aliyun.com/pypi/simple/ \
     -w /tmp/wheelhouse
 
 FROM golang:1.24.2 AS build-smokescreen
