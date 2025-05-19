@@ -4,6 +4,8 @@ ENV TERM=xterm \
     LANG='C.UTF-8'  \
     LC_ALL='C.UTF-8'
 
+RUN npm config set registry https://registry.npmmirror.com
+
 # Install dependencies
 COPY package.json /tmp/
 COPY yarn.lock /tmp/

@@ -28,7 +28,7 @@ services:
       CVAT_DEBUG_WAIT: '${CVAT_DEBUG_WAIT_CLIENT:-no}'
       COVERAGE_PROCESS_START:
     ports:
-      - '127.0.0.1:9090:9090'
+      - '127.0.0.1:9089:9090'
 
   cvat_worker_export:
     environment:
@@ -110,7 +110,7 @@ services:
 
   cvat_redis_inmem:
     ports:
-      - '127.0.0.1:6379:6379'
+      - '127.0.0.1:6378:6379'
 
   cvat_redis_ondisk:
     ports:
