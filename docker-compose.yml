@@ -38,6 +38,10 @@ services:
     container_name: cvat_db
     image: postgres:15-alpine
     restart: always
+    build:
+      context: .
+      args:
+        - BUILD_DATE=${CURRENT_TIMESTAMP}
     environment:
       POSTGRES_USER: root
       POSTGRES_DB: cvat
@@ -417,11 +421,31 @@ services:
 
 volumes:
   cvat_db:
+    driver_opts:
+      type: none
+      device: /mnt/cvat_share/db
+      o: bind
   cvat_data:
+    driver_opts:
+      type: none
+      device: /mnt/cvat_share/data
+      o: bind
   cvat_keys:
+    driver_opts:
+      type: none
+      device: /mnt/cvat_share/keys
+      o: bind
   cvat_logs:
+    driver_opts:
+      type: none
+      device: /mnt/cvat_share/logs
+      o: bind
   cvat_inmem_db:
   cvat_events_db:
+    driver_opts:
+      type: none
+      device: /mnt/cvat_share/events_db
+      o: bind
   cvat_cache_db:
 
 networks:
