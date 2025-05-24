@@ -1,0 +1,24 @@
+services:
+  iat3_server:
+    volumes:
+      - iat3_share:/home/django/share:ro
+  iat3_worker_import:
+    volumes:
+      - iat3_share:/home/django/share:ro
+  iat3_worker_export:
+    volumes:
+      - iat3_share:/home/django/share:ro
+  iat3_worker_annotation:
+    volumes:
+      - iat3_share:/home/django/share:ro
+  iat3_worker_chunks:
+    volumes:
+      - iat3_share:/home/django/share:ro
+
+volumes:
+  iat3_share:
+    driver_opts:
+      type: none
+      device: /home/dev61/iat3/sample
+      o: bind
+
