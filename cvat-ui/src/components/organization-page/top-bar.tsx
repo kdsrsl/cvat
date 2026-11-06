@@ -334,14 +334,7 @@ function OrganizationTopBar(props: Props): JSX.Element {
                                 Leave organization
                             </Button>
                         ) : null}
-                        <Button
-                            className='cvat-invite-org-members-button'
-                            type='primary'
-                            onClick={() => setVisibleInviteModal(true)}
-                            icon={<PlusCircleOutlined />}
-                        >
-                            Invite members
-                        </Button>
+                        
                     </Space>
                 </Col>
             </Row>

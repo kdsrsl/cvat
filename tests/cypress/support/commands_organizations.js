@@ -133,32 +133,6 @@ Cypress.Commands.add('checkOrganizationMembers', (expectedMembersCount, expected
     });
 });
 
-Cypress.Commands.add('inviteMembersToOrganization', (members) => {
-    cy.get('.cvat-organization-top-bar-buttons-block').should('exist');
-    cy.contains('button', 'Invite members').click();
-    cy.get('.cvat-organization-invitation-modal').should('be.visible');
-    let addedMembers = 0;
-    for (const el of members) {
-        cy.get('.cvat-organization-invitation-field-email').last().find('input').type(el.email);
-        cy.get('.cvat-organization-invitation-field-email').last().find('input').should('have.value', el.email);
-        cy.get('.cvat-organization-invitation-field-email')
-            .find('[aria-label="check-circle"]')
-            .should('exist');
-        cy.get('.cvat-organization-invitation-field-role').last().click();
-        cy.get('.ant-select-dropdown')
-            .should('be.visible')
-            .not('.ant-select-dropdown-hidden')
-            .find(`[title=${el.role}]`)
-            .click();
-        addedMembers++;
-        if (addedMembers !== Object.keys(members).length) {
-            cy.contains('button', 'Invite more').click();
-        }
-    }
-    cy.get('.cvat-organization-invitation-modal')
-        .contains('button', 'OK')
-        .click();
-});
 
 Cypress.Commands.add('removeMemberFromOrganization', (username) => {
     cy.contains('.cvat-organization-member-item-username', username)

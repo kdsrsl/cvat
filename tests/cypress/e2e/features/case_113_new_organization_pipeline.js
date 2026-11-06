@@ -115,25 +115,7 @@ context('New organization pipeline.', () => {
             cy.createOrganization(organizationParams);
         });
 
-        it('Open the organization settings. Invite members.', () => {
-            cy.openOrganization(organizationParams.shortName);
-            cy.checkOrganizationParams(organizationParams);
-            cy.checkOrganizationMembers(1, [firstUserName]);
-            const membersToInvite = [
-                {
-                    email: capitalizeEmail(secondUser.email),
-                    role: 'Worker',
-                },
-                {
-                    email: thirdUser.email,
-                    role: 'Worker',
-                },
-            ];
-            cy.inviteMembersToOrganization(membersToInvite);
-            cy.then(() => {
-                cy.checkOrganizationMembers(3, [firstUserName, secondUserName, thirdUserName]);
-            });
-        });
+        
 
         it('Search within organizations: All members shoould be queryable', () => {
             const searchBar = 'searchBar';

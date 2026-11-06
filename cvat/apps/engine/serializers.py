@@ -2048,7 +2048,7 @@ class ValidationParamsSerializer(serializers.ModelSerializer):
 class DataSerializer(serializers.ModelSerializer):
     """
     Read more about parameters here:
-    https://docs.cvat.ai/docs/manual/basics/create-annotation-task/#advanced-configuration
+    https://docs.iat.ai/docs/manual/basics/create-annotation-task/#advanced-configuration
     """
 
     image_quality = serializers.IntegerField(min_value=0, max_value=100,
@@ -2093,7 +2093,7 @@ class DataSerializer(serializers.ModelSerializer):
     use_cache = serializers.BooleanField(default=False,
         help_text=textwrap.dedent("""\
             Enable or disable task data chunk caching for the task.
-            Read more: https://docs.cvat.ai/docs/manual/advanced/data_on_fly/
+            Read more: https://docs.iat.ai/docs/manual/advanced/data_on_fly/
         """))
     copy_data = serializers.BooleanField(default=False, help_text=textwrap.dedent("""\
             Copy data from the server file share to CVAT during the task creation.

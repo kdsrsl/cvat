@@ -70,21 +70,10 @@ export default function TaskActionsItems(menuItemsData: MenuItemsData, taskMenuP
         label: 'Automatic annotation',
     }, 30]);
 
-    menuItems.push([{
-        key: 'backup_task',
-        onClick: onBackupTask,
-        label: 'Backup Task',
-    }, 40]);
+    
 
-    menuItems.push([{
-        key: 'view-analytics',
-        label: <Link to={`/tasks/${taskID}/analytics`}>View analytics</Link>,
-    }, 50]);
 
-    menuItems.push([{
-        key: 'quality_control',
-        label: <Link to={`/tasks/${taskID}/quality-control`}>Quality control</Link>,
-    }, 60]);
+    
 
     if (isConsensusEnabled) {
         menuItems.push([{

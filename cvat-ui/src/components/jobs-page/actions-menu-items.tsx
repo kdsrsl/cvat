@@ -82,10 +82,7 @@ export default function JobActionsItems(
         }, 50]);
     }
 
-    menuItems.push([{
-        key: 'view-analytics',
-        label: <Link to={`/tasks/${taskID}/jobs/${jobID}/analytics`}>View analytics</Link>,
-    }, 60]);
+
 
     if (onDeleteJob) {
         menuItems.push([{ type: 'divider' }, 69]);

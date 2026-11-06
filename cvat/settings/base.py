@@ -608,7 +608,7 @@ USE_X_FORWARDED_HOST = True
 # https://github.com/moggers87/django-sendfile2
 SENDFILE_ROOT = BASE_DIR
 
-CVAT_DOCS_URL = "https://docs.cvat.ai/docs/"
+CVAT_DOCS_URL = "https://docs.iat.ai/docs/"
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "CVAT REST API",
@@ -618,8 +618,8 @@ SPECTACULAR_SETTINGS = {
     # Set VERSION to None if only the request version should be rendered.
     "VERSION": __version__,
     "CONTACT": {
-        "name": "CVAT.ai team",
-        "url": "https://github.com/cvat-ai/cvat",
+        "name": "iat.ai team",
+        "url": "https://github.com/iat/iat3",
         "email": "support@cvat.ai",
     },
     "LICENSE": {
