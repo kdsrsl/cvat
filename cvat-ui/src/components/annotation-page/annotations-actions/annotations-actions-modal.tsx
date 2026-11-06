@@ -359,16 +359,7 @@ function AnnotationsActionsModalContent(props: Props): JSX.Element {
                                 <Text> Selected action will be applied to the current object </Text>
                             ) : (
                                 <div>
-                                    <Text>Actions allow executing certain algorithms on </Text>
-                                    <Text strong>
-                                        <a
-                                            target='_blank'
-                                            rel='noopener noreferrer'
-                                            href={config.FILTERS_GUIDE_URL}
-                                        >
-                                            filtered
-                                        </a>
-                                    </Text>
+                                    <Text>Actions allow executing certain algorithms on  filtered </Text>
                                     <Text> annotations. </Text>
                                 </div>
                             )

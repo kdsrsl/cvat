@@ -43,21 +43,8 @@ export default function ProjectActionsItems(
         label: 'Import dataset',
     }, 10]);
 
-    menuItems.push([{
-        key: 'backup-project',
-        onClick: onBackupProject,
-        label: 'Backup Project',
-    }, 20]);
 
-    menuItems.push([{
-        key: 'view-analytics',
-        label: <Link to={`/projects/${projectID}/analytics`}>View analytics</Link>,
-    }, 30]);
 
-    menuItems.push([{
-        key: 'set-webhooks',
-        label: <Link to={`/projects/${projectID}/webhooks`}>Setup webhooks</Link>,
-    }, 40]);
 
     menuItems.push([{
         type: 'divider',

@@ -24,44 +24,7 @@ function PaidFeaturePlaceholder(props: Readonly<Props>): JSX.Element | null {
 
     return (
         <div className='cvat-paid-feature-placeholder-wrapper'>
-            <Card
-                className='cvat-paid-feature-placeholder'
-                cover={<img src='/assets/paid-feature.png' alt='some text' />}
-            >
-                <Row className='cvat-paid-feature-placeholder-inner-wrapper'>
-                    <Col span={24}>
-                        <Row justify='center'>
-                            <Col className='cvat-paid-feature-placeholder-title'>
-                                <Text>
-                                    You discovered a premium feature
-                                </Text>
-                            </Col>
-                        </Row>
-                        <Row justify='center'>
-                            <Col className='cvat-paid-feature-placeholder-description'>
-                                <CVATMarkdown>
-                                    {featureDescription}
-                                </CVATMarkdown>
-                            </Col>
-                        </Row>
-                    </Col>
-                    <Col span={24}>
-                        <Row justify='center'>
-                            <Col className='cvat-paid-feature-placeholder-pricing'>
-                                <Button
-                                    type='primary'
-                                    onClick={(event: React.MouseEvent): void => {
-                                        event.preventDefault();
-                                        window.open(url, '_blank');
-                                    }}
-                                >
-                                    Check pricing
-                                </Button>
-                            </Col>
-                        </Row>
-                    </Col>
-                </Row>
-            </Card>
+            fix code 4160.
         </div>
     );
 }
