@@ -29,7 +29,12 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN --mount=type=cache,target=/root/.cache/pip/http \
     python3 -m pip install -U pip==${PIP_VERSION}
 
+# 国内pip方式1
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+# 国内pip方式2
+RUN mkdir -p /root/.pip && \
+    echo "[global]" > /root/.pip/pip.conf && \
+    echo "index-url = https://pypi.tuna.tsinghua.edu.cn/simple" >> /root/.pip/pip.conf
 
 # We build OpenH264, FFmpeg and PyAV in a separate build stage,
 # because this way Docker can do it in parallel to all the other packages.
@@ -62,6 +67,7 @@ RUN echo $PWD
 RUN pwd
 #COPY /home/senrsl/iat3tmp /home/senrsl/iat3tmp
 COPY iat3tmp /home/senrsl/iat3tmp
+COPY .cargo .cargo
 
 # Since we're using pip-compile-multi, each dependency can only be listed in
 # one requirements file. In the case of PyAV, that should be
@@ -180,7 +186,7 @@ RUN python -m pip install --upgrade setuptools
 ARG PIP_VERSION
 ARG PIP_DISABLE_PIP_VERSION_CHECK=1
 
-RUN python -m pip install -U pip==${PIP_VERSION}
+RUN python -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
 RUN --mount=type=bind,from=build-image,source=/tmp/wheelhouse,target=/mnt/wheelhouse \
     --mount=type=bind,from=build-image-av,source=/tmp/wheelhouse,target=/mnt/wheelhouse-av \
     python -m pip install --no-index /mnt/wheelhouse/*.whl /mnt/wheelhouse-av/*.whl
