@@ -65,3 +65,4 @@ cvat-ui/dist
 /cvat/apps/*/rules/*_test.gen.rego
 /tmp/
 /tmp2/
+/iat3tmp/

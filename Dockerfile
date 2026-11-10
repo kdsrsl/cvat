@@ -36,6 +36,11 @@ RUN mkdir -p /root/.pip && \
     echo "[global]" > /root/.pip/pip.conf && \
     echo "index-url = https://pypi.tuna.tsinghua.edu.cn/simple" >> /root/.pip/pip.conf
 
+RUN echo 'cargo --version'
+RUN echo 'rustc --version'
+RUN echo 'which rustup'
+RUN echo 'which cargo'
+
 # We build OpenH264, FFmpeg and PyAV in a separate build stage,
 # because this way Docker can do it in parallel to all the other packages.
 FROM build-image-base AS build-image-av
