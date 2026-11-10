@@ -110,7 +110,7 @@ RUN mkdir -p /home/senrsl/iat3tmp
 RUN  ls /home/senrsl/iat3tmp
 RUN echo $PWD
 RUN pwd
-# COPY /home/senrsl/iat3tmp /home/senrsl/iat3tmp
+#COPY /home/senrsl/iat3tmp /home/senrsl/iat3tmp
 COPY iat3tmp /home/senrsl/iat3tmp
 COPY .cargo .cargo
 RUN cd /home/senrsl/iat3tmp/smokescreen && go build -o /tmp/smokescreen
@@ -185,20 +185,13 @@ RUN if [ "$CLAM_AV" = "yes" ]; then \
         rm -rf /var/lib/apt/lists/*; \
     fi
 
-# 国内pip方式1
-RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-# 国内pip方式2
-RUN mkdir -p /root/.pip && \
-    echo "[global]" > /root/.pip/pip.conf && \
-    echo "index-url = https://pypi.tuna.tsinghua.edu.cn/simple" >> /root/.pip/pip.conf
-
 
 # Install wheels from the build image
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 # setuptools should be uninstalled after updating google-cloud-storage
 # https://github.com/googleapis/python-storage/issues/740
-RUN python -m pip install --upgrade setuptools
+RUN python -m pip install --upgrade setuptools -i https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PIP_VERSION
 ARG PIP_DISABLE_PIP_VERSION_CHECK=1
 
@@ -206,6 +199,13 @@ RUN python -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.e
 RUN --mount=type=bind,from=build-image,source=/tmp/wheelhouse,target=/mnt/wheelhouse \
     --mount=type=bind,from=build-image-av,source=/tmp/wheelhouse,target=/mnt/wheelhouse-av \
     python -m pip install --no-index /mnt/wheelhouse/*.whl /mnt/wheelhouse-av/*.whl
+
+# 国内pip方式111
+#RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+# 国内pip方式222
+#RUN mkdir -p /root/.pip && \
+#    echo "[global]" > /root/.pip/pip.conf && \
+#    echo "index-url = https://pypi.tuna.tsinghua.edu.cn/simple" >> /root/.pip/pip.conf
 
 ENV NUMPROCS=1
 COPY --from=build-image-av /opt/ffmpeg/lib /usr/lib
