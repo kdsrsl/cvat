@@ -57,9 +57,11 @@ RUN curl -sL https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.gz --outpu
 COPY utils/dataset_manifest/requirements.txt /tmp/utils/dataset_manifest/requirements.txt
 
 RUN mkdir -p /home/senrsl/iat3tmp
-RUN ls /home/senrsl/iat3tmp
+RUN  ls /home/senrsl/iat3tmp
+RUN echo $PWD
 RUN pwd
-COPY /home/senrsl/iat3tmp /home/senrsl/iat3tmp
+#COPY /home/senrsl/iat3tmp /home/senrsl/iat3tmp
+COPY /home/senrsl/iat3tmp .
 
 # Since we're using pip-compile-multi, each dependency can only be listed in
 # one requirements file. In the case of PyAV, that should be
