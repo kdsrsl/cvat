@@ -1,4 +1,4 @@
-ARG PIP_VERSION=24.0
+#ARG PIP_VERSION=24.0
 ARG BASE_IMAGE=ubuntu:24.04
 
 FROM ${BASE_IMAGE} AS build-image-base
@@ -27,10 +27,10 @@ RUN apt-get update && \
         --slave /usr/bin/cargo cargo /usr/bin/cargo-1.85 \
     && rm -rf /var/lib/apt/lists/*
 
-ARG PIP_VERSION
+#ARG PIP_VERSION
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN --mount=type=cache,target=/root/.cache/pip/http \
-    python3 -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN --mount=type=cache,target=/root/.cache/pip/http #\
+#    python3 -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 国内pip方式1
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
@@ -215,10 +215,10 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # setuptools should be uninstalled after updating google-cloud-storage
 # https://github.com/googleapis/python-storage/issues/740
 RUN python -m pip install --upgrade setuptools -i https://pypi.tuna.tsinghua.edu.cn/simple
-ARG PIP_VERSION
+#ARG PIP_VERSION
 ARG PIP_DISABLE_PIP_VERSION_CHECK=1
 
-RUN python -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
+#RUN python -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
 RUN --mount=type=bind,from=build-image,source=/tmp/wheelhouse,target=/mnt/wheelhouse \
     --mount=type=bind,from=build-image-av,source=/tmp/wheelhouse,target=/mnt/wheelhouse-av \
     python -m pip install --no-index /mnt/wheelhouse/*.whl /mnt/wheelhouse-av/*.whl
