@@ -27,7 +27,7 @@ RUN apt-get update && \
 ARG PIP_VERSION
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN --mount=type=cache,target=/root/.cache/pip/http \
-    python3 -m pip install -U pip==${PIP_VERSION}
+    python3 -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 国内pip方式1
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
