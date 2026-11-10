@@ -157,6 +157,7 @@ ENV DJANGO_SETTINGS_MODULE="cvat.settings.${CVAT_CONFIGURATION}"
 # Install necessary apt packages
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get --no-install-recommends install -yq \
+        adduser \
         bzip2 \
         ca-certificates \
         curl \
