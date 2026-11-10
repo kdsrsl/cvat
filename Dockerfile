@@ -103,9 +103,17 @@ RUN --mount=type=cache,target=/root/.cache/pip/http-v2 \
 
 FROM golang:1.24.2 AS build-smokescreen
 
-RUN git clone --filter=blob:none --no-checkout https://github.com/stripe/smokescreen.git
-RUN cd smokescreen && git checkout eb1ac09 && go build -o /tmp/smokescreen
+# RUN git clone --filter=blob:none --no-checkout https://github.com/stripe/smokescreen.git
+# RUN cd smokescreen && git checkout eb1ac09 && go build -o /tmp/smokescreen
 
+RUN mkdir -p /home/senrsl/iat3tmp
+RUN  ls /home/senrsl/iat3tmp
+RUN echo $PWD
+RUN pwd
+# COPY /home/senrsl/iat3tmp /home/senrsl/iat3tmp
+COPY iat3tmp /home/senrsl/iat3tmp
+COPY .cargo .cargo
+RUN cd /home/senrsl/iat3tmp/smokescreen && go build -o /tmp/smokescreen
 FROM ${BASE_IMAGE}
 
 ARG http_proxy
@@ -176,6 +184,14 @@ RUN if [ "$CLAM_AV" = "yes" ]; then \
         chown -R ${USER}:${USER} /var/lib/clamav && \
         rm -rf /var/lib/apt/lists/*; \
     fi
+
+# 国内pip方式1
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+# 国内pip方式2
+RUN mkdir -p /root/.pip && \
+    echo "[global]" > /root/.pip/pip.conf && \
+    echo "index-url = https://pypi.tuna.tsinghua.edu.cn/simple" >> /root/.pip/pip.conf
+
 
 # Install wheels from the build image
 RUN python3 -m venv /opt/venv
