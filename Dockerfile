@@ -1,5 +1,5 @@
 ARG PIP_VERSION=24.0
-ARG BASE_IMAGE=ubuntu:22.04
+ARG BASE_IMAGE=ubuntu:24.04
 
 FROM ${BASE_IMAGE} AS build-image-base
 
@@ -21,7 +21,10 @@ RUN apt-get update && \
         libxmlsec1-dev \
         libxmlsec1-openssl \
         libhdf5-dev \
-        cargo \
+        cargo-1.85 \
+    && update-alternatives \
+        --install /usr/bin/rustc rustc /usr/bin/rustc-1.85 185 \
+        --slave /usr/bin/cargo cargo /usr/bin/cargo-1.85 \
     && rm -rf /var/lib/apt/lists/*
 
 ARG PIP_VERSION
@@ -36,10 +39,10 @@ RUN mkdir -p /root/.pip && \
     echo "[global]" > /root/.pip/pip.conf && \
     echo "index-url = https://pypi.tuna.tsinghua.edu.cn/simple" >> /root/.pip/pip.conf
 
-RUN echo 'cargo --version'
-RUN echo 'rustc --version'
-RUN echo 'which rustup'
-RUN echo 'which cargo'
+RUN cargo --version
+RUN rustc --version
+RUN which rustup
+RUN which cargo
 
 # We build OpenH264, FFmpeg and PyAV in a separate build stage,
 # because this way Docker can do it in parallel to all the other packages.
