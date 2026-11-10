@@ -189,8 +189,11 @@ COPY --from=build-smokescreen /tmp/smokescreen /usr/local/bin/smokescreen
 
 # Add a non-root user
 ENV USER=${USER}
-ENV HOME /home/${USER}
-RUN adduser --shell /bin/bash --disabled-password --gecos "" ${USER}
+#ENV HOME /home/${USER}
+#RUN adduser --shell /bin/bash --disabled-password --gecos "" ${USER}
+RUN deluser --remove-home ubuntu && \
+    adduser --uid=1000 --shell /bin/bash --disabled-password --gecos "" ${USER}
+ENV CVAT_BASE_DIR=/home/${USER}
 
 ARG CLAM_AV="no"
 RUN if [ "$CLAM_AV" = "yes" ]; then \
