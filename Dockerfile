@@ -61,7 +61,7 @@ RUN  ls /home/senrsl/iat3tmp
 RUN echo $PWD
 RUN pwd
 #COPY /home/senrsl/iat3tmp /home/senrsl/iat3tmp
-COPY /home/senrsl/iat3tmp .
+COPY iat3tmp /home/senrsl/iat3tmp
 
 # Since we're using pip-compile-multi, each dependency can only be listed in
 # one requirements file. In the case of PyAV, that should be
