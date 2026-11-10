@@ -97,6 +97,9 @@ RUN pwd
 #COPY /home/senrsl/iat3tmp /home/senrsl/iat3tmp
 COPY iat3tmp /home/senrsl/iat3tmp
 COPY .cargo .cargo
+RUN  ls /home/senrsl/iat3tmp
+RUN  ls .cargo
+RUN echo $PWD
 
 # Exclude av from the requirements file
 RUN sed -i '/^av==/d' /tmp/utils/dataset_manifest/requirements.txt
