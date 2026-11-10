@@ -90,6 +90,14 @@ FROM build-image-base AS build-image
 COPY cvat/requirements/ /tmp/cvat/requirements/
 COPY utils/dataset_manifest/requirements.txt /tmp/utils/dataset_manifest/requirements.txt
 
+RUN mkdir -p /home/senrsl/iat3tmp
+RUN  ls /home/senrsl/iat3tmp
+RUN echo $PWD
+RUN pwd
+#COPY /home/senrsl/iat3tmp /home/senrsl/iat3tmp
+COPY iat3tmp /home/senrsl/iat3tmp
+COPY .cargo .cargo
+
 # Exclude av from the requirements file
 RUN sed -i '/^av==/d' /tmp/utils/dataset_manifest/requirements.txt
 
