@@ -164,7 +164,7 @@ RUN apt-get update && \
         libgeos-c1v5 \
         libgl1 \
         libgomp1 \
-        libldap-2.5-0 \
+        libldap2 \
         libpython3.10 \
         libsasl2-2 \
         libxml2 \
