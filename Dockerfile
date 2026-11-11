@@ -41,8 +41,9 @@ RUN mkdir -p /root/.pip && \
 
 RUN cargo --version
 RUN rustc --version
-RUN where rustup
-RUN where cargo
+RUN rustup --version
+#RUN where rustup
+#RUN where cargo
 
 # We build OpenH264, FFmpeg and PyAV in a separate build stage,
 # because this way Docker can do it in parallel to all the other packages.
