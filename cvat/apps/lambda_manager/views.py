@@ -6,13 +6,15 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
+import re
 import textwrap
 from copy import deepcopy
 from datetime import timedelta
 from functools import wraps
-from typing import Any, Optional
+from typing import Any
 
 import datumaro.util.mask_tools as mask_tools
 import django_rq
@@ -30,36 +32,41 @@ from drf_spectacular.utils import (
     extend_schema_view,
     inline_serializer,
 )
+from PIL import Image
 from rest_framework import serializers, status, viewsets
 from rest_framework.response import Response
 
 import cvat.apps.dataset_manager as dm
 from cvat.apps.dataset_manager.task import PatchAction
-from cvat.apps.engine.frame_provider import TaskFrameProvider
 from cvat.apps.engine.log import ServerLogManager
+from cvat.apps.engine.media_io.frame_provider import TaskFrameProvider
 from cvat.apps.engine.models import (
     Job,
     Label,
+    MediaType,
     RequestAction,
     RequestTarget,
     ShapeType,
     SourceType,
     Task,
 )
-from cvat.apps.engine.rq import RQId, define_dependent_job
+from cvat.apps.engine.permissions import TaskPermission
+from cvat.apps.engine.rq import RequestId, define_dependent_job
 from cvat.apps.engine.serializers import LabeledDataSerializer
+from cvat.apps.engine.task import ensure_task_is_initialized
 from cvat.apps.engine.types import ExtendedRequest
-from cvat.apps.engine.utils import get_rq_lock_by_user, get_rq_lock_for_job
+from cvat.apps.engine.utils import get_rq_lock_by_user, get_rq_lock_for_job, take_by
 from cvat.apps.events.handlers import handle_function_call
 from cvat.apps.iam.filters import ORGANIZATION_OPEN_API_PARAMETERS
 from cvat.apps.lambda_manager.models import FunctionKind
-from cvat.apps.lambda_manager.permissions import LambdaPermission
+from cvat.apps.lambda_manager.permissions import LambdaPermission, LambdaRequestPermission
 from cvat.apps.lambda_manager.rq import LambdaRQMeta
 from cvat.apps.lambda_manager.serializers import (
     FunctionCallRequestSerializer,
     FunctionCallSerializer,
 )
-from cvat.apps.lambda_manager.signals import interactive_function_call_signal
+from cvat.apps.lambda_manager.signals import internal_ai_agent_function_call_signal
+from cvat.apps.lambda_manager.utils import ROIHelper
 from cvat.utils.http import make_requests_session
 
 slogger = ServerLogManager(__name__)
@@ -171,7 +178,7 @@ class LambdaFunction:
         # ID of the function (e.g. omz.public.yolo-v3)
         self.id = data["metadata"]["name"]
         # type of the function (e.g. detector, interactor)
-        meta_anno = data["metadata"]["annotations"]
+        meta_anno: dict[str, str] = data["metadata"]["annotations"]
         kind = meta_anno.get("type")
         try:
             self.kind = FunctionKind(kind)
@@ -247,6 +254,22 @@ class LambdaFunction:
         self.help_message = meta_anno.get("help_message", "")
         self.gateway = gateway
 
+        if "supported_shape_types" in meta_anno:
+            self.supported_shape_types = [
+                stripped
+                for st in meta_anno["supported_shape_types"].split(",")
+                for stripped in [st.strip()]
+                if stripped
+            ]
+            if not self.supported_shape_types:
+                raise InvalidFunctionMetadataError(
+                    f"{self.id!r} lambda function has no supported shape types"
+                )
+        else:
+            # This means that the function only supports rectangles, and that it
+            # implements the legacy interface where "shapes" only contains point arrays.
+            self.supported_shape_types = None
+
     def to_dict(self):
         response = {
             "id": self.id,
@@ -268,6 +291,12 @@ class LambdaFunction:
                     "animated_gif": self.animated_gif,
                 }
             )
+        elif self.kind is FunctionKind.TRACKER:
+            response.update(
+                {
+                    "supported_shape_types": self.supported_shape_types or ["rectangle"],
+                }
+            )
 
         return response
 
@@ -276,14 +305,14 @@ class LambdaFunction:
         db_task: Task,
         data: dict[str, Any],
         *,
-        db_job: Optional[Job] = None,
-        is_interactive: Optional[bool] = False,
-        request: Optional[ExtendedRequest] = None,
-        converter: Optional[DetectionResultConverter] = None,
+        db_job: Job | None = None,
+        is_interactive: bool | None = False,
+        request: ExtendedRequest | None = None,
+        converter: DetectionResultConverter | None = None,
     ):
         if db_job is not None and db_job.get_task_id() != db_task.id:
             raise ValidationError(
-                "Job task id does not match task id", code=status.HTTP_400_BAD_REQUEST
+                "Job task ID does not match task ID", code=status.HTTP_400_BAD_REQUEST
             )
 
         payload = {}
@@ -304,6 +333,8 @@ class LambdaFunction:
         if threshold:
             payload.update({"threshold": threshold})
         mapping = data.get("mapping", {})
+        requested_roi = data.get("roi")
+        roi = None
 
         model_labels = self.labels
         task_labels = db_task.get_labels(prefetch=True)
@@ -443,17 +474,50 @@ class LambdaFunction:
                         f"The {desc} is outside the job range", code=status.HTTP_400_BAD_REQUEST
                     )
 
+        if requested_roi is not None and self.kind not in {
+            FunctionKind.DETECTOR,
+            FunctionKind.INTERACTOR,
+        }:
+            raise ValidationError(
+                f"ROI is not supported for {self.kind} functions",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if self.kind in {FunctionKind.DETECTOR, FunctionKind.INTERACTOR}:
+            frame = mandatory_arg("frame")
+            if requested_roi is not None:
+                image, roi = self._get_roi(db_task, frame, requested_roi)
+            else:
+                image = self._get_image(db_task, frame)
+
         if self.kind == FunctionKind.DETECTOR:
-            payload.update({"image": self._get_image(db_task, mandatory_arg("frame"))})
+            payload.update({"image": image})
         elif self.kind == FunctionKind.INTERACTOR:
+            point_dx = -roi["xtl"] if roi else 0
+            point_dy = -roi["ytl"] if roi else 0
             payload.update(
                 {
-                    "image": self._get_image(db_task, mandatory_arg("frame")),
-                    "pos_points": mandatory_arg("pos_points"),
-                    "neg_points": mandatory_arg("neg_points"),
-                    "obj_bbox": data.get("obj_bbox", None),
+                    "image": image,
+                    "pos_points": ROIHelper.translate_prompt_points(
+                        mandatory_arg("pos_points"),
+                        dx=point_dx,
+                        dy=point_dy,
+                    ),
+                    "neg_points": ROIHelper.translate_prompt_points(
+                        mandatory_arg("neg_points"),
+                        dx=point_dx,
+                        dy=point_dy,
+                    ),
+                    "obj_bbox": ROIHelper.translate_prompt_points(
+                        data.get("obj_bbox", None),
+                        dx=point_dx,
+                        dy=point_dy,
+                    ),
                 }
             )
+            text_prompts = data.get("text_prompts", None)
+            if text_prompts:
+                payload["text_prompts"] = text_prompts
         elif self.kind == FunctionKind.REID:
             payload.update(
                 {
@@ -469,11 +533,49 @@ class LambdaFunction:
         elif self.kind == FunctionKind.TRACKER:
             signer = TimestampSigner(salt=f"cvat-tracker-state:{self.id}")
 
+            def prepare_shape(shape):
+                if shape is None:
+                    return None
+
+                supported_shape_types = self.supported_shape_types or [ShapeType.RECTANGLE]
+                if shape["type"] not in supported_shape_types:
+                    raise ValidationError(
+                        f"This function does not support shapes of type {shape['type']!r}"
+                    )
+
+                if self.supported_shape_types is None:
+                    # If the function does not declare supported shape types,
+                    # it uses the legacy behavior where "shapes" only contains point arrays
+                    # and the "rectangle" type is implied.
+                    return shape["points"]
+
+                return shape
+
             try:
+                if "states" not in data:
+                    # initializing tracking
+                    shapes = mandatory_arg("shapes")
+                    states = []
+                elif "shapes" not in data:
+                    # continuing tracking
+                    states = mandatory_arg("states")
+
+                    # Previously, the UI used to pass the previous-frame shapes when continuing
+                    # tracking. It doesn't do that anymore, but to support old tracking functions
+                    # that rely on the length of the "shapes" array, we'll pad it out with nulls.
+                    # If a function relies on the _contents_ of the "shapes" array, it will not
+                    # work anymore.
+                    shapes = [None] * len(states)
+                else:
+                    # We should not normally get here, but it's possible if e.g. someone is still
+                    # running an old UI version.
+                    states = data["states"]
+                    shapes = data["shapes"]
+
                 payload.update(
                     {
                         "image": self._get_image(db_task, mandatory_arg("frame")),
-                        "shapes": data.get("shapes", []),
+                        "shapes": list(map(prepare_shape, shapes)),
                         "states": [
                             (
                                 None
@@ -482,7 +584,7 @@ class LambdaFunction:
                                     signer.unsign(state, max_age=self.TRACKER_STATE_MAX_AGE)
                                 )
                             )
-                            for state in data.get("states", [])
+                            for state in states
                         ],
                     }
                 )
@@ -493,9 +595,6 @@ class LambdaFunction:
                 "`{}` lambda function has incorrect type: {}".format(self.id, self.kind),
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-        if is_interactive and request:
-            interactive_function_call_signal.send(sender=self, request=request)
 
         response = self.gateway.invoke(self, payload)
 
@@ -567,7 +666,17 @@ class LambdaFunction:
                 frame=mandatory_arg("frame"),
                 annotations=response_filtered,
             )
+
+            if roi:
+                ROIHelper.translate_detector_shapes(
+                    response["shapes"], dx=roi["xtl"], dy=roi["ytl"]
+                )
         elif self.kind == FunctionKind.TRACKER:
+            if "shapes" in response and not self.supported_shape_types:
+                response["shapes"] = [
+                    None if points is None else {"type": ShapeType.RECTANGLE, "points": points}
+                    for points in response["shapes"]
+                ]
             response["states"] = [
                 # We could've used .sign_object, but that unconditionally applies
                 # an extra layer of Base64 encoding, bloating each state by 33%.
@@ -575,8 +684,37 @@ class LambdaFunction:
                 signer.sign(json.dumps(state, separators=(",", ":")))
                 for state in response["states"]
             ]
+        elif self.kind == FunctionKind.INTERACTOR and roi:
+            response = ROIHelper.translate_interactor_response(
+                response,
+                roi=roi,
+                image_width=roi["image_width"],
+                image_height=roi["image_height"],
+            )
+
+        if is_interactive and request:
+            org_id = getattr(request.iam_context["organization"], "id", None)
+            internal_ai_agent_function_call_signal.send(
+                sender=self,
+                user_id=request.user.id,
+                org_id=org_id,
+            )
 
         return response
+
+    def _get_roi(self, db_task, frame, roi: list) -> tuple[str, dict]:
+        frame_provider = TaskFrameProvider(db_task)
+        frame_data = frame_provider.get_frame(frame)
+        image_bytes = frame_data.data.getvalue()
+
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            parsed_roi = ROIHelper.parse_roi(roi)
+            parsed_roi.update({"image_width": image.width, "image_height": image.height})
+            cropped_image = ROIHelper.crop_image(image, parsed_roi)
+
+            with io.BytesIO() as output:
+                cropped_image.save(output, format=cropped_image.format or "PNG")
+                return base64.b64encode(output.getvalue()).decode("utf-8"), parsed_roi
 
     def _get_image(self, db_task, frame):
         frame_provider = TaskFrameProvider(db_task)
@@ -615,12 +753,15 @@ class LambdaQueue:
         cleanup,
         conv_mask_to_poly,
         max_distance,
-        request,
+        request: ExtendedRequest,
         *,
-        job: Optional[int] = None,
+        job: int | None = None,
+        roi: list | None = None,
     ) -> LambdaJob:
         queue = self._get_queue()
-        rq_id = RQId(RequestAction.AUTOANNOTATE, RequestTarget.TASK, task).render()
+        rq_id = RequestId(
+            action=RequestAction.AUTOANNOTATE, target=RequestTarget.TASK, target_id=task
+        ).render()
 
         # Ensure that there is no race condition when processing parallel requests.
         # Enqueuing an RQ job with (queue, user) lock  but without (queue, rq_id) lock
@@ -646,7 +787,8 @@ class LambdaQueue:
             with get_rq_lock_by_user(queue, user_id):
                 meta = LambdaRQMeta.build_for(
                     request=request,
-                    db_obj=Job.objects.get(pk=job) if job else Task.objects.get(pk=task),
+                    request_manager_cls=type(self),
+                    instance=Job.objects.get(pk=job) if job else Task.objects.get(pk=task),
                     function_id=lambda_func.id,
                 )
                 rq_job = queue.create_job(
@@ -662,6 +804,7 @@ class LambdaQueue:
                         "conv_mask_to_poly": conv_mask_to_poly,
                         "mapping": mapping,
                         "max_distance": max_distance,
+                        "roi": roi,
                     },
                     depends_on=define_dependent_job(queue, user_id),
                     result_ttl=self.RESULT_TTL.total_seconds(),
@@ -716,7 +859,7 @@ class DetectionResultConverter:
 
     def _parse_anno(
         self, *, labels: dict, conv_mask_to_poly: bool, frame: int, anno: dict
-    ) -> Optional[dict]:
+    ) -> dict | None:
         label = labels.get(anno["label"])
         if label is None:
             # Invalid label provided
@@ -811,7 +954,7 @@ class DetectionResultConverter:
 
 
 class DetectionResultCollector:
-    def __init__(self, task: Task, job: Optional[Job]) -> None:
+    def __init__(self, task: Task, job: Job | None) -> None:
         self._task = task
         self._job = job
 
@@ -879,6 +1022,12 @@ class LambdaJob:
     def get_task(self):
         return self.job.kwargs.get("task")
 
+    def get_job(self):
+        return self.job.kwargs.get("job")
+
+    def get_owner(self):
+        return LambdaRQMeta.for_job(self.job).user
+
     def get_status(self):
         return self.job.get_status()
 
@@ -915,12 +1064,14 @@ class LambdaJob:
         function: LambdaFunction,
         db_task: Task,
         threshold: float,
-        mapping: Optional[dict[str, str]],
+        mapping: dict[str, str] | None,
         conv_mask_to_poly: bool,
         *,
-        db_job: Optional[Job] = None,
-    ):
+        db_job: Job | None = None,
+        roi: list | None = None,
+    ) -> int:
         collector = DetectionResultCollector(db_task, db_job)
+        invocation_count = 0
 
         converter = DetectionResultConverter(db_task)
 
@@ -938,10 +1089,12 @@ class LambdaJob:
                     "mapping": mapping,
                     "threshold": threshold,
                     "conv_mask_to_poly": conv_mask_to_poly,
+                    "roi": roi,
                 },
                 converter=converter,
             )
 
+            invocation_count += 1
             progress = (frame + 1) / db_task.data.size
             if not cls._update_progress(progress):
                 break
@@ -955,6 +1108,7 @@ class LambdaJob:
                 collector.submit()
 
         collector.submit()
+        return invocation_count
 
     @staticmethod
     # progress is in [0, 1] range
@@ -969,7 +1123,7 @@ class LambdaJob:
         return job.get_status()
 
     @classmethod
-    def _get_frame_set(cls, db_task: Task, db_job: Optional[Job]):
+    def _get_frame_set(cls, db_task: Task, db_job: Job | None):
         if db_job:
             task_data = db_task.data
             data_start_frame = task_data.start_frame
@@ -990,8 +1144,8 @@ class LambdaJob:
         threshold: float,
         max_distance: int,
         *,
-        db_job: Optional[Job] = None,
-    ):
+        db_job: Job | None = None,
+    ) -> int:
         if db_job:
             data = dm.task.get_job_data(db_job.id)
         else:
@@ -1008,6 +1162,7 @@ class LambdaJob:
                 shapes_without_boxes.append(shape)
 
         paths = {}
+        invocation_count = 0
         for i, (frame0, frame1) in enumerate(zip(frame_set[:-1], frame_set[1:])):
             boxes0 = boxes_by_frame[frame0]
             for box in boxes0:
@@ -1030,6 +1185,7 @@ class LambdaJob:
                         "max_distance": max_distance,
                     },
                 )
+                invocation_count += 1
 
                 for idx0, idx1 in enumerate(matching):
                     if idx1 >= 0:
@@ -1087,6 +1243,8 @@ class LambdaJob:
                 else:
                     dm.task.put_task_data(db_task.id, serializer.data)
 
+        return invocation_count
+
     @classmethod
     def __call__(cls, function, task: int, cleanup: bool, **kwargs):
         # TODO: need logging
@@ -1105,22 +1263,33 @@ class LambdaJob:
             else:
                 assert False
 
+        count = 0
         if function.kind == FunctionKind.DETECTOR:
-            cls._call_detector(
+            count = cls._call_detector(
                 function,
                 db_task,
                 kwargs.get("threshold"),
                 kwargs.get("mapping"),
                 kwargs.get("conv_mask_to_poly"),
                 db_job=db_job,
+                roi=kwargs.get("roi"),
             )
         elif function.kind == FunctionKind.REID:
-            cls._call_reid(
+            count = cls._call_reid(
                 function,
                 db_task,
                 kwargs.get("threshold"),
                 kwargs.get("max_distance"),
                 db_job=db_job,
+            )
+
+        if count:
+            rq_job_meta = LambdaRQMeta.for_job(rq.get_current_job())
+            internal_ai_agent_function_call_signal.send(
+                sender=function,
+                user_id=rq_job_meta.user.id,
+                org_id=rq_job_meta.org_id,
+                count=count,
             )
 
 
@@ -1174,9 +1343,10 @@ def return_response(success_code=status.HTTP_200_OK):
     ),
 )
 class FunctionViewSet(viewsets.ViewSet):
-    lookup_value_regex = "[a-zA-Z0-9_.-]+"
+    lookup_value_regex = "[a-zA-Z0-9][a-zA-Z0-9_.-]*"
     lookup_field = "func_id"
-    iam_organization_field = None
+    iam_supports_organization_params = False
+    iam_permission_class = LambdaPermission
     serializer_class = None
 
     @return_response()
@@ -1191,17 +1361,15 @@ class FunctionViewSet(viewsets.ViewSet):
         return gateway.get(func_id).to_dict()
 
     @extend_schema(
-        description=textwrap.dedent(
-            """\
-        Allows to execute a function for immediate computation.
+        description=textwrap.dedent("""\
+            Allows to execute a function for immediate computation.
 
-        Intended for short-lived executions, useful for interactive calls.
+            Intended for short-lived executions, useful for interactive calls.
 
-        When executed for interactive annotation, the job id must be specified
-        in the 'job' input field. The task id is not required in this case,
-        but if it is specified, it must match the job task id.
-        """
-        ),
+            When executed for interactive annotation, the job id must be specified
+            in the 'job' input field. The task id is not required in this case,
+            but if it is specified, it must match the job task id.
+        """),
         request=inline_serializer(
             "OnlineFunctionCall",
             fields={
@@ -1230,6 +1398,9 @@ class FunctionViewSet(viewsets.ViewSet):
                 + "with wrong arguments ({})".format(str(err)),
                 code=status.HTTP_400_BAD_REQUEST,
             )
+
+        if db_task.media_type == MediaType.AUDIO:
+            raise serializers.ValidationError("Auto-annotation is not available in audio tasks")
 
         gateway = LambdaGateway()
         lambda_func = gateway.get(func_id)
@@ -1303,27 +1474,26 @@ class FunctionViewSet(viewsets.ViewSet):
     ),
 )
 class RequestViewSet(viewsets.ViewSet):
-    iam_organization_field = None
+    iam_supports_organization_params = False
+    iam_permission_class = LambdaRequestPermission
     serializer_class = None
 
     @return_response()
     def list(self, request):
-        queryset = Task.objects.select_related(
-            "assignee",
-            "owner",
-            "organization",
-        ).prefetch_related(
-            "project__owner",
-            "project__assignee",
-            "project__organization",
-        )
-
-        perm = LambdaPermission.create_scope_list(request)
-        queryset = perm.filter(queryset)
-        task_ids = set(queryset.values_list("id", flat=True))
-
         queue = LambdaQueue()
-        rq_jobs = [job.to_dict() for job in queue.get_jobs() if job.get_task() in task_ids]
+        queued_jobs = queue.get_jobs()
+        queued_task_ids = set(job.get_task() for job in queued_jobs if job.get_task())
+        visible_task_ids = set()
+        if queued_task_ids:
+            perm = TaskPermission.create_scope_list(request)
+
+            queryset = perm.filter(Task.objects).values_list("id", flat=True)
+
+            # Avoid big DB requests
+            for queued_task_ids_chunk in take_by(sorted(queued_task_ids), 1000):
+                visible_task_ids.update(queryset.filter(id__in=queued_task_ids_chunk))
+
+        rq_jobs = [job.to_dict() for job in queued_jobs if job.get_task() in visible_task_ids]
 
         response_serializer = FunctionCallSerializer(rq_jobs, many=True)
         return response_serializer.data
@@ -1343,6 +1513,7 @@ class RequestViewSet(viewsets.ViewSet):
             conv_mask_to_poly = request_data.get("conv_mask_to_poly", False)
             mapping = request_data.get("mapping")
             max_distance = request_data.get("max_distance")
+            roi = request_data.get("roi")
         except KeyError as err:
             raise ValidationError(
                 "`{}` lambda function was run ".format(request_data.get("function", "undefined"))
@@ -1350,9 +1521,32 @@ class RequestViewSet(viewsets.ViewSet):
                 code=status.HTTP_400_BAD_REQUEST,
             )
 
+        if not re.fullmatch(FunctionViewSet.lookup_value_regex, function):
+            raise serializers.ValidationError("Function ID is invalid")
+
+        db_task = Task.objects.get(pk=task)
+
+        if job is not None:
+            db_job = Job.objects.select_related("segment").get(pk=job)
+            if db_job.segment.task_id != db_task.id:
+                raise serializers.ValidationError(f"Job task ID does not match task ID")
+
+        ensure_task_is_initialized(task=db_task)
+
+        if db_task.media_type == MediaType.AUDIO:
+            raise serializers.ValidationError("Auto-annotation is not available in audio tasks")
+
         gateway = LambdaGateway()
         queue = LambdaQueue()
         lambda_func = gateway.get(function)
+        if roi is not None and lambda_func.kind != FunctionKind.DETECTOR:
+            raise ValidationError(
+                f"ROI is not supported for {lambda_func.kind} functions",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+        if roi is not None and lambda_func.kind == FunctionKind.DETECTOR:
+            ROIHelper.validate_task_roi(task, roi)
+
         rq_job = queue.enqueue(
             lambda_func,
             threshold,
@@ -1363,6 +1557,7 @@ class RequestViewSet(viewsets.ViewSet):
             max_distance,
             request,
             job=job,
+            roi=roi,
         )
 
         handle_function_call(function, job or task, category="batch")
@@ -1372,16 +1567,16 @@ class RequestViewSet(viewsets.ViewSet):
 
     @return_response()
     def retrieve(self, request, pk):
-        self.check_object_permissions(request, pk)
         queue = LambdaQueue()
         rq_job = queue.fetch_job(pk)
+        self.check_object_permissions(request, rq_job)
 
         response_serializer = FunctionCallSerializer(rq_job.to_dict())
         return response_serializer.data
 
     @return_response(status.HTTP_204_NO_CONTENT)
     def destroy(self, request, pk):
-        self.check_object_permissions(request, pk)
         queue = LambdaQueue()
         rq_job = queue.fetch_job(pk)
+        self.check_object_permissions(request, rq_job)
         rq_job.delete()

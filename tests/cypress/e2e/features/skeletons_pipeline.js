@@ -16,6 +16,15 @@ context('Manipulations with skeletons', { scrollBehavior: false }, () => {
             { x: 0.27, y: 0.15 },
         ],
     };
+    const skeleton2Size = 3;
+    const skeleton2 = {
+        name: 'person',
+        points: [
+            { x: 0.40, y: 0.25 },
+            { x: 0.30, y: 0.50 },
+            { x: 0.50, y: 0.50 },
+        ],
+    };
     const taskName = 'skeletons main pipeline';
     const imagesFolder = `cypress/fixtures/${taskName}`;
     const archiveName = `${taskName}.zip`;
@@ -34,7 +43,13 @@ context('Manipulations with skeletons', { scrollBehavior: false }, () => {
         xbr: 300,
         ybr: 300,
     };
-    let taskID = null;
+    const skeleton2Position = {
+        xtl: 450,
+        ytl: 150,
+        xbr: 600,
+        ybr: 350,
+    };
+    let taskId = null;
 
     before(() => {
         cy.visit('/auth/login');
@@ -55,15 +70,12 @@ context('Manipulations with skeletons', { scrollBehavior: false }, () => {
 
     after(() => {
         cy.headlessLogout();
-        if (taskID !== null) {
-            cy.getAuthKey().then((response) => {
-                const authKey = response.body.key;
+        if (taskId !== null) {
+            cy.task('getAuthHeaders').then((authHeaders) => {
                 cy.request({
                     method: 'DELETE',
-                    url: `/api/tasks/${taskID}`,
-                    headers: {
-                        Authorization: `Token ${authKey}`,
-                    },
+                    url: `/api/tasks/${taskId}`,
+                    headers: authHeaders,
                 });
             });
         }
@@ -75,15 +87,16 @@ context('Manipulations with skeletons', { scrollBehavior: false }, () => {
             cy.get('#name').type(taskName);
             cy.addNewSkeletonLabel(skeleton);
             expect(skeletonSize).to.be.equal(skeleton.points.length);
+            cy.addNewSkeletonLabel(skeleton2);
+            expect(skeleton2Size).to.be.equal(skeleton2.points.length);
             cy.get('input[type="file"]').attachFile(archiveName, { subjectType: 'drag-n-drop' });
             cy.intercept('/api/tasks?**').as('taskPost');
             cy.contains('Submit & Open').scrollIntoView();
             cy.contains('Submit & Open').click();
             cy.wait('@taskPost').then((interception) => {
-                taskID = interception.response.body.id;
+                taskId = interception.response.body.id;
                 expect(interception.response.statusCode).to.be.equal(201);
-                cy.intercept(`/api/tasks/${taskID}`).as('getTask');
-                cy.wait('@getTask');
+                cy.url().should('include', `/tasks/${taskId}`);
                 cy.get('.cvat-job-item').should('exist').and('be.visible');
                 cy.openJob();
             });
@@ -120,7 +133,7 @@ context('Manipulations with skeletons', { scrollBehavior: false }, () => {
             cy.get(selector).should('not.exist');
         }
 
-        it('Wrapping bounding box for a skeleton is visible only when skeleton is activated', () => {
+        it('Wrapping bounding box for a skeleton is not visible regardless of activation state', () => {
             createSkeletonObject('shape');
 
             cy.get('body').click();
@@ -128,8 +141,61 @@ context('Manipulations with skeletons', { scrollBehavior: false }, () => {
                 cy.get('.cvat_canvas_skeleton_wrapping_rect').should('exist').and('not.be.visible');
                 cy.wrap($el).trigger('mousemove');
                 cy.wrap($el).should('have.class', 'cvat_canvas_shape_activated');
-                cy.get('.cvat_canvas_skeleton_wrapping_rect').should('exist').and('be.visible');
+                cy.get('.cvat_canvas_skeleton_wrapping_rect').should('exist').and('not.be.visible');
             });
+
+            // Reuse this fixture to exercise variable-height Parts through a real virtual-row remount.
+            cy.saveJob();
+            cy.window().then(async (win) => {
+                const jobId = Number(win.location.pathname.split('/').pop());
+                const [job] = await win.cvat.jobs.get({ jobID: jobId });
+                await job.annotations.get(0);
+                const { shapes } = await job.annotations.export();
+                const copies = new win.Array();
+                for (let index = 0; index < 20; index++) {
+                    copies.push(win.JSON.parse(win.JSON.stringify(shapes[0]), (key, value) => (
+                        key === 'id' ? undefined : value
+                    )));
+                }
+                await job.annotations.import({ shapes: copies });
+                await job.annotations.save();
+            });
+            cy.reload();
+            cy.get('.cvat-canvas-container').should('be.visible');
+            const viewport = '.cvat-objects-sidebar-virtual-list [data-virtual-list-viewport]';
+            const parts = '#cvat-objects-sidebar-state-item-1 .cvat-objects-sidebar-state-item-elements-collapse';
+            cy.getObjectSidebarItem(1);
+            cy.get(`${parts} .ant-collapse-header`).click();
+            cy.get('#cvat-objects-sidebar-state-item-element-2').should('be.visible');
+            cy.get(viewport).scrollTo('bottom', { duration: 0 });
+            cy.get('#cvat-objects-sidebar-state-item-1').should('not.exist');
+            cy.getObjectSidebarItem(1);
+            cy.get('#cvat-objects-sidebar-state-item-element-2').should('be.visible');
+            cy.get(`${parts} .ant-collapse-header`).click();
+            cy.get('#cvat-objects-sidebar-state-item-element-2').should('not.be.visible');
+            cy.get(viewport).scrollTo('bottom', { duration: 0 });
+            cy.get('#cvat_canvas_shape_2').trigger('mousemove', { force: true });
+            cy.get('#cvat_canvas_shape_2').dblclick({ force: true });
+            cy.get('#cvat-objects-sidebar-state-item-element-2').should(($item) => {
+                const holder = $item[0].closest('[data-virtual-list-viewport]');
+                expect($item[0].getBoundingClientRect().top, 'jump aligns the expanded skeleton part')
+                    .to.be.closeTo(holder.getBoundingClientRect().top + holder.clientTop, 1);
+            });
+
+            cy.removeAnnotations();
+        });
+
+        it('Control points for a skeleton exist only when skeleton is activated', () => {
+            createSkeletonObject('shape');
+
+            cy.get('body').click();
+
+            cy.get('.cvat_canvas_skeleton_control_point').should('not.exist');
+
+            cy.get('#cvat_canvas_shape_1').trigger('mousemove');
+            cy.get('#cvat_canvas_shape_1').should('have.class', 'cvat_canvas_shape_activated');
+
+            cy.get('.cvat_canvas_skeleton_control_point').should('have.length', 9);
 
             cy.removeAnnotations();
         });
@@ -141,6 +207,40 @@ context('Manipulations with skeletons', { scrollBehavior: false }, () => {
                 cy.get('span[aria-label="user"]').click();
             });
             cy.get('#cvat_canvas_shape_2').should('have.class', 'cvat_canvas_shape_occluded');
+
+            deleteSkeleton('#cvat_canvas_shape_1', 'shape', false);
+            cy.removeAnnotations();
+        });
+
+        it('Undo and redo outside property for a skeleton point', () => {
+            createSkeletonObject('shape');
+
+            const skeletonPointSelector = '#cvat-objects-sidebar-state-item-element-2';
+            cy.get(skeletonPointSelector).within(() => {
+                cy.get('.cvat-object-item-button-outside').click();
+                cy.get('.cvat-object-item-button-outside-enabled').should('exist');
+                cy.get('.cvat-object-item-button-occluded-enabled').should('not.exist');
+            });
+
+            cy.get('.cvat-annotation-header-undo-button').trigger('mouseover');
+            cy.get('.ant-tooltip-inner').should('contain.text', 'Undo: Changed outside');
+            cy.get('.cvat-annotation-header-undo-button').click();
+            cy.get(skeletonPointSelector).within(() => {
+                cy.get('.cvat-object-item-button-outside-enabled').should('not.exist');
+                cy.get('.cvat-object-item-button-occluded-enabled').should('not.exist');
+            });
+
+            cy.get('.cvat-annotation-header-redo-button').click();
+            cy.get(skeletonPointSelector).within(() => {
+                cy.get('.cvat-object-item-button-outside-enabled').should('exist');
+                cy.get('.cvat-object-item-button-occluded-enabled').should('not.exist');
+            });
+
+            cy.get('.cvat-annotation-header-undo-button').click();
+            cy.get(skeletonPointSelector).within(() => {
+                cy.get('.cvat-object-item-button-outside-enabled').should('not.exist');
+                cy.get('.cvat-object-item-button-occluded-enabled').should('not.exist');
+            });
 
             deleteSkeleton('#cvat_canvas_shape_1', 'shape', false);
             cy.removeAnnotations();
@@ -228,13 +328,187 @@ context('Manipulations with skeletons', { scrollBehavior: false }, () => {
             createSkeletonObject('shape');
             cy.get('#cvat_canvas_shape_2').click();
             cy.get('#cvat_canvas_shape_2').trigger('mouseover');
-            cy.get('body').type('{ctrl}c');
-            cy.get('body').type('{ctrl}v');
+            cy.pressWithPlatformModifier('c');
+            cy.pressWithPlatformModifier('v');
             cy.get('.cvat-canvas-container').click();
 
             cy.get('#cvat_canvas_shape_7').should('exist').and('be.visible');
 
             cy.removeAnnotations();
+        });
+    });
+
+    describe('Filtering skeleton elements', () => {
+        before(() => {
+            cy.removeAnnotations();
+            cy.goCheckFrameNumber(0);
+        });
+
+        it('Create multiple skeleton objects for filtering tests', () => {
+            cy.createSkeleton({
+                ...skeletonPosition,
+                labelName: skeleton.name,
+                type: 'Shape',
+            });
+
+            cy.get('#cvat_canvas_shape_1').should('exist').and('be.visible');
+
+            cy.createSkeleton({
+                ...skeleton2Position,
+                labelName: skeleton2.name,
+                type: 'Track',
+            });
+
+            cy.get('.cvat_canvas_shape').should('have.length.at.least', 2);
+
+            cy.get('#cvat-objects-sidebar-state-item-1').within(() => {
+                cy.get('.cvat-objects-sidebar-state-item-elements-collapse').click();
+            });
+            cy.get('#cvat-objects-sidebar-state-item-element-2').within(() => {
+                cy.get('.cvat-object-item-button-occluded').click();
+            });
+            cy.get('#cvat_canvas_shape_2').should('have.class', 'cvat_canvas_shape_occluded');
+        });
+
+        it('Filter by skeleton sublabel keypoint group', () => {
+            const sublabelName = `${skeleton.name} / 1`;
+
+            cy.addFiltersRule(0, 'elements');
+            cy.setFilter({
+                target: 'elements',
+                groupIndex: 0,
+                ruleIndex: 0,
+                field: 'Label',
+                operator: '==',
+                value: sublabelName,
+                submit: true,
+            });
+
+            cy.get('#cvat_canvas_shape_1').should('exist');
+            cy.get('#cvat_canvas_shape_2').should('exist');
+            cy.get('#cvat_canvas_shape_3').should('not.exist');
+            cy.get('#cvat_canvas_shape_7').should('not.exist');
+
+            cy.clearFilters();
+        });
+
+        it('Filter by multiple skeleton elements using OR condition', () => {
+            const sublabel1 = `${skeleton.name} / 1`;
+            const sublabel2 = `${skeleton2.name} / 2`;
+
+            cy.addFiltersRule(0, 'elements');
+            cy.setFilter({
+                target: 'elements',
+                groupIndex: 0,
+                ruleIndex: 0,
+                field: 'Label',
+                operator: '==',
+                value: sublabel1,
+            });
+            cy.addFiltersRule(0, 'elements');
+            cy.setGroupCondition(0, 'Or', 'elements');
+            cy.setFilter({
+                target: 'elements',
+                groupIndex: 0,
+                ruleIndex: 1,
+                field: 'Label',
+                operator: '==',
+                value: sublabel2,
+                submit: true,
+            });
+
+            cy.get('#cvat_canvas_shape_1').should('exist');
+            cy.get('#cvat_canvas_shape_2').should('exist');
+            cy.get('#cvat_canvas_shape_3').should('not.exist');
+            cy.get('#cvat_canvas_shape_7').should('exist');
+            cy.get('#cvat_canvas_shape_8').should('not.exist');
+            cy.get('#cvat_canvas_shape_9').should('exist');
+            cy.get('#cvat_canvas_shape_10').should('not.exist');
+
+            cy.clearFilters();
+        });
+
+        it('Filter skeleton elements by occluded property', () => {
+            const sublabel1 = `${skeleton.name} / 1`;
+
+            cy.addFiltersRule(0, 'elements');
+            cy.setFilter({
+                target: 'elements',
+                groupIndex: 0,
+                ruleIndex: 0,
+                field: 'Label',
+                operator: '==',
+                value: sublabel1,
+            });
+            cy.addFiltersRule(0, 'elements');
+            cy.setFilter({
+                target: 'elements',
+                groupIndex: 0,
+                ruleIndex: 1,
+                field: 'Occluded',
+                operator: '==',
+                value: 'true',
+                submit: true,
+            });
+
+            cy.get('#cvat_canvas_shape_1').should('exist');
+            cy.get('#cvat_canvas_shape_2').should('exist');
+            cy.get('#cvat_canvas_shape_3').should('not.exist');
+            cy.get('#cvat_canvas_shape_7').should('not.exist');
+
+            cy.clearFilters();
+        });
+
+        it('Complex filter: ((label == "person / 1") || (label == "skeleton / 1")) && occluded == true', () => {
+            const sublabel1 = `${skeleton2.name} / 2`;
+            const sublabel2 = `${skeleton.name} / 1`;
+
+            cy.addFiltersGroup(0, 'elements');
+            cy.addFiltersGroup(0, 'elements');
+            cy.setFilter({
+                target: 'elements',
+                groupIndex: 1,
+                ruleIndex: 0,
+                field: 'Label',
+                operator: '==',
+                value: sublabel1,
+            });
+            cy.addFiltersRule(1, 'elements');
+            cy.setFilter({
+                target: 'elements',
+                groupIndex: 1,
+                ruleIndex: 1,
+                field: 'Occluded',
+                operator: '==',
+                value: 'true',
+            });
+
+            cy.setGroupCondition(0, 'Or', 'elements');
+            cy.setFilter({
+                target: 'elements',
+                groupIndex: 2,
+                ruleIndex: 0,
+                field: 'Label',
+                operator: '==',
+                value: sublabel2,
+            });
+            cy.addFiltersRule(2, 'elements');
+            cy.setFilter({
+                target: 'elements',
+                groupIndex: 2,
+                ruleIndex: 1,
+                field: 'Occluded',
+                operator: '==',
+                value: 'true',
+                submit: true,
+            });
+
+            cy.get('#cvat_canvas_shape_1').should('exist');
+            cy.get('#cvat_canvas_shape_2').should('exist');
+            cy.get('#cvat_canvas_shape_3').should('not.exist');
+            cy.get('#cvat_canvas_shape_7').should('not.exist');
+
+            cy.clearFilters();
         });
     });
 });

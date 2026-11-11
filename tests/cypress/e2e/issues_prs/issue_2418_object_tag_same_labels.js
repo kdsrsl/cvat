@@ -9,7 +9,7 @@ import { taskName, labelName } from '../../support/const';
 context('Check hide/unhide functionality from label tab for object and tag with a same label.', () => {
     const issueId = '2418';
     const createRectangleShape2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Shape',
         labelName,
         firstX: 260,
@@ -19,6 +19,7 @@ context('Check hide/unhide functionality from label tab for object and tag with 
     };
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTaskJob(taskName);
     });
 

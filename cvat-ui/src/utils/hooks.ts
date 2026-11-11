@@ -6,7 +6,7 @@
 import _ from 'lodash';
 import {
     useRef, useEffect, useState, useCallback,
-    EffectCallback, DependencyList,
+    useLayoutEffect, EffectCallback, DependencyList,
 } from 'react';
 import { useSelector } from 'react-redux';
 import { useHistory, useLocation, useParams } from 'react-router';
@@ -14,8 +14,8 @@ import { CombinedState, PluginComponent, InstanceType } from 'reducers';
 import { registerComponentShortcuts } from 'actions/shortcuts-actions';
 import { authQuery } from './auth-query';
 import { KeyMap, KeyMapItem } from './mousetrap-react';
+import { dispatchContextMenuEvent } from './context-menu-helper';
 
-// eslint-disable-next-line import/prefer-default-export
 export function usePrevious<T>(value: T): T | undefined {
     const ref = useRef<T>();
     useEffect(() => {
@@ -38,7 +38,7 @@ export function useIsMounted(): () => boolean {
 }
 
 export type Plugin = {
-    component: CallableFunction;
+    component: any; // TODO: research which type should be here
     weight: number;
 };
 
@@ -50,14 +50,14 @@ export function usePlugins(
     const filteredComponents = components.filter((component) => component.data.shouldBeRendered(props, state));
     const mappedComponents = filteredComponents
         .map(({ component, data }): {
-            component: CallableFunction;
+            component: any; // TODO: research which type should be here
             weight: number;
         } => ({
             component,
             weight: data.weight,
         }));
-    const ref = useRef<Plugin[]>(mappedComponents);
 
+    const ref = useRef<Plugin[]>(mappedComponents);
     if (!_.isEqual(ref.current, mappedComponents)) {
         ref.current = mappedComponents;
     }
@@ -151,6 +151,28 @@ export function useResetShortcutsOnUnmount(componentShortcuts: Record<string, Ke
     }, []);
 }
 
+export function usePageSizeData(ref: any): any {
+    const [pageSizeData, setPageSizeData] = useState({ width: 0, height: 0 });
+
+    useLayoutEffect(() => {
+        const resize = (): void => {
+            if (ref?.current) {
+                const { clientWidth, clientHeight } = ref.current;
+                setPageSizeData({ width: clientWidth, height: clientHeight });
+            }
+        };
+
+        resize();
+        window.addEventListener('resize', resize);
+
+        return () => {
+            window.removeEventListener('resize', resize);
+        };
+    }, []);
+
+    return pageSizeData;
+}
+
 export function useUpdateEffect(effect: EffectCallback, deps?: DependencyList): void {
     const isFirstRender = useRef(true);
 
@@ -182,4 +204,122 @@ export function useInstanceId(type: InstanceType): number {
     if (type === InstanceType.PROJECT) return +(params.pid as string);
     if (type === InstanceType.JOB) return +(params.jid as string);
     return +(params.tid as string);
+}
+
+export type DropdownEditField = {
+    dropdownOpen: boolean;
+    editField: string | null;
+    startEditField: (key: string) => void;
+    stopEditField: () => void;
+    onOpenChange: (open: boolean, options: { source: 'trigger' | 'menu' }) => void;
+    onMenuClick: (options: { key: string }) => void;
+};
+
+export function useDropdownEditField(): DropdownEditField {
+    const [dropdownOpen, setDropdownOpen] = useState(false);
+    const [editField, setEditField] = useState<string | null>(null);
+    const startEditField = useCallback((field: string) => setEditField(field), []);
+    const stopEditField = useCallback(() => {
+        setEditField(null);
+        setDropdownOpen(false);
+    }, []);
+
+    const onOpenChange = useCallback((open: boolean, { source }: {
+        source: 'trigger' | 'menu';
+    }) => {
+        if (source === 'trigger') {
+            setDropdownOpen(open);
+        }
+        if (!open && editField) {
+            stopEditField();
+        }
+    }, [editField, stopEditField]);
+
+    const onMenuClick = useCallback(({ key }: { key: string }) => {
+        if (!key.startsWith('edit') && !key.endsWith('selector')) {
+            setDropdownOpen(false);
+        }
+    }, []);
+
+    return {
+        dropdownOpen,
+        editField,
+        startEditField,
+        stopEditField,
+        onOpenChange,
+        onMenuClick,
+    };
+}
+
+interface ResourceQueryDefaultParams {
+    page?: number;
+    pageSize?: number;
+    filter?: string | null;
+}
+
+export function useResourceQuery<QueryType extends {
+    page: number;
+    pageSize: number;
+    filter?: string;
+}>(query: QueryType, defaultParams: ResourceQueryDefaultParams = {}): QueryType {
+    const {
+        page = 1,
+        pageSize = 10,
+        filter = null,
+    } = defaultParams;
+
+    const history = useHistory();
+
+    const queryParams = new URLSearchParams(history.location.search);
+    const updatedQuery = { ...query };
+    for (const key of Object.keys(updatedQuery)) {
+        (updatedQuery as Record<string, any>)[key] = queryParams.get(key) || null;
+        if (key === 'page') {
+            updatedQuery.page = updatedQuery.page ? +updatedQuery.page : page;
+        }
+        if (key === 'pageSize') {
+            updatedQuery.pageSize = updatedQuery.pageSize ? +updatedQuery.pageSize : pageSize;
+        }
+        if (key === 'filter') {
+            updatedQuery.filter = updatedQuery.filter ? updatedQuery.filter : filter;
+        }
+    }
+    return updatedQuery;
+}
+
+export interface ContextMenuClick<T extends HTMLElement = HTMLElement> {
+    itemRef: React.RefObject<T>;
+    handleContextMenuClick: (e: React.MouseEvent) => void;
+    handleContextMenuCapture: (e: React.MouseEvent) => void;
+}
+
+export function useContextMenuClick<T extends HTMLElement = HTMLElement>(
+    preventSelectors: string[] = [
+        'a',
+        'input',
+        '.ant-dropdown-menu-item',
+        '.ant-select-item-option',
+        '.ant-select-selector',
+    ],
+): ContextMenuClick<T> {
+    const itemRef = useRef<T>(null);
+
+    const handleContextMenuClick = useCallback((e: React.MouseEvent) => {
+        if (itemRef.current) {
+            dispatchContextMenuEvent(itemRef.current, e);
+        }
+    }, []);
+
+    const shouldPreventContextMenu = useCallback((target: EventTarget | null): boolean => {
+        if (!target || !(target instanceof Element)) return false;
+        return preventSelectors.some((selector) => target.closest(selector) !== null);
+    }, [preventSelectors]);
+
+    const handleContextMenuCapture = useCallback((e: React.MouseEvent) => {
+        if (shouldPreventContextMenu(e.target)) {
+            e.stopPropagation();
+        }
+    }, [shouldPreventContextMenu]);
+
+    return { itemRef, handleContextMenuClick, handleContextMenuCapture };
 }

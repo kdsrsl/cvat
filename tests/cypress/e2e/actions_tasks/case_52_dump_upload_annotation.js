@@ -10,7 +10,7 @@ import { taskName, labelName } from '../../support/const';
 context('Dump/Upload annotation.', { browser: '!firefox' }, () => {
     const caseId = '52';
     const createRectangleTrack2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Track',
         labelName,
         firstX: 250,
@@ -57,11 +57,12 @@ context('Dump/Upload annotation.', { browser: '!firefox' }, () => {
         cy.get(modalWindowClassName)
             .should('be.visible')
             .within(() => {
-                cy.contains('button', 'Update').click();
+                cy.contains('button', 'Replace annotations').click();
             });
     }
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTaskJob(taskName);
         cy.createRectangle(createRectangleTrack2Points);
     });
@@ -73,7 +74,7 @@ context('Dump/Upload annotation.', { browser: '!firefox' }, () => {
                 as: 'exportAnnotationsRenameArchive',
                 type: 'annotations',
                 format: exportFormat,
-                archiveCustomName: 'task_export_annotation_custome_name',
+                archiveCustomName: 'task_export_annotation_custom_name',
             };
             cy.exportJob(exportAnnotationRenameArchive);
             cy.downloadExport().then((file) => {
@@ -154,7 +155,7 @@ context('Dump/Upload annotation.', { browser: '!firefox' }, () => {
             confirmUpdate('.cvat-modal-content-load-task-annotation');
             cy.get('.cvat-notification-notice-import-annotation-start').should('be.visible');
             cy.closeNotification('.cvat-notification-notice-import-annotation-start');
-            cy.get('.cvat-notification-notice-load-annotation-failed')
+            cy.get('.cvat-notification-notice-load-annotation-failed', { timeout: 120000 })
                 .should('exist')
                 .find('[aria-label="close"]')
                 .click();

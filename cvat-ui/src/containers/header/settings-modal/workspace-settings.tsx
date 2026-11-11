@@ -8,17 +8,18 @@ import { connect } from 'react-redux';
 import {
     switchAutoSave,
     changeAutoSaveInterval,
-    changeAAMZoomMargin,
+    changeFocusedObjectPadding,
     switchShowingInterpolatedTracks,
     switchShowingObjectsTextAlways,
-    switchAutomaticBordering,
     switchIntelligentPolygonCrop,
     changeDefaultApproxPolyAccuracy,
     switchTextFontSize,
     switchControlPointsSize,
     switchTextPosition,
     switchTextContent,
+    switchShowingConflictRequirements,
     switchShowingTagsOnFrame,
+    switchAdaptiveZoom,
 } from 'actions/settings-actions';
 
 import { CombinedState } from 'reducers';
@@ -28,32 +29,34 @@ import WorkspaceSettingsComponent from 'components/header/settings-modal/workspa
 interface StateToProps {
     autoSave: boolean;
     autoSaveInterval: number;
-    aamZoomMargin: number;
+    focusedObjectPadding: number;
     showAllInterpolationTracks: boolean;
     showObjectsTextAlways: boolean;
     defaultApproxPolyAccuracy: number;
-    automaticBordering: boolean;
+    adaptiveZoom: boolean;
     intelligentPolygonCrop: boolean;
     textFontSize: number;
     controlPointsSize: number;
     textPosition: 'auto' | 'center';
     textContent: string;
+    showConflictRequirements: boolean;
     showTagsOnFrame: boolean;
 }
 
 interface DispatchToProps {
     onSwitchAutoSave(enabled: boolean): void;
     onChangeAutoSaveInterval(interval: number): void;
-    onChangeAAMZoomMargin(margin: number): void;
+    onChangeFocusedObjectPadding(margin: number): void;
     onSwitchShowingInterpolatedTracks(enabled: boolean): void;
     onSwitchShowingObjectsTextAlways(enabled: boolean): void;
-    onSwitchAutomaticBordering(enabled: boolean): void;
+    onSwitchAdaptiveZoom(enabled: boolean): void;
     onSwitchIntelligentPolygonCrop(enabled: boolean): void;
     onChangeDefaultApproxPolyAccuracy(approxPolyAccuracy: number): void;
     onChangeTextFontSize(fontSize: number): void;
     onChangeControlPointsSize(pointsSize: number): void;
     onChangeTextPosition(position: 'auto' | 'center'): void;
     onChangeTextContent(textContent: string[]): void;
+    onSwitchShowingConflictRequirements(enabled: boolean): void;
     onSwitchShowingTagsOnFrame(enabled: boolean): void;
 }
 
@@ -62,32 +65,34 @@ function mapStateToProps(state: CombinedState): StateToProps {
     const {
         autoSave,
         autoSaveInterval,
-        aamZoomMargin,
+        focusedObjectPadding,
         showAllInterpolationTracks,
         showObjectsTextAlways,
-        automaticBordering,
+        adaptiveZoom,
         intelligentPolygonCrop,
         defaultApproxPolyAccuracy,
         textFontSize,
         controlPointsSize,
         textPosition,
         textContent,
+        showConflictRequirements,
         showTagsOnFrame,
     } = workspace;
 
     return {
         autoSave,
         autoSaveInterval,
-        aamZoomMargin,
+        focusedObjectPadding,
         showAllInterpolationTracks,
         showObjectsTextAlways,
-        automaticBordering,
+        adaptiveZoom,
         intelligentPolygonCrop,
         defaultApproxPolyAccuracy,
         textFontSize,
         controlPointsSize,
         textPosition,
         textContent,
+        showConflictRequirements,
         showTagsOnFrame,
     };
 }
@@ -95,16 +100,17 @@ function mapStateToProps(state: CombinedState): StateToProps {
 const mapDispatchToProps: DispatchToProps = {
     onSwitchAutoSave: switchAutoSave,
     onChangeAutoSaveInterval: changeAutoSaveInterval,
-    onChangeAAMZoomMargin: changeAAMZoomMargin,
+    onChangeFocusedObjectPadding: changeFocusedObjectPadding,
     onSwitchShowingInterpolatedTracks: switchShowingInterpolatedTracks,
     onSwitchShowingObjectsTextAlways: switchShowingObjectsTextAlways,
-    onSwitchAutomaticBordering: switchAutomaticBordering,
+    onSwitchAdaptiveZoom: switchAdaptiveZoom,
     onSwitchIntelligentPolygonCrop: switchIntelligentPolygonCrop,
     onChangeDefaultApproxPolyAccuracy: changeDefaultApproxPolyAccuracy,
     onChangeTextFontSize: switchTextFontSize,
     onChangeControlPointsSize: switchControlPointsSize,
     onChangeTextPosition: switchTextPosition,
     onChangeTextContent: switchTextContent,
+    onSwitchShowingConflictRequirements: switchShowingConflictRequirements,
     onSwitchShowingTagsOnFrame: switchShowingTagsOnFrame,
 };
 

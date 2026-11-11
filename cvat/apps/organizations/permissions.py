@@ -3,9 +3,11 @@
 #
 # SPDX-License-Identifier: MIT
 
+from enum import StrEnum
+
 from django.conf import settings
 
-from cvat.apps.iam.permissions import OpenPolicyAgentPermission, StrEnum
+from cvat.apps.iam.permissions import OpenPolicyAgentPermission
 
 from .models import Membership
 
@@ -21,10 +23,9 @@ class OrganizationPermission(OpenPolicyAgentPermission):
     @classmethod
     def create(cls, request, view, obj, iam_context):
         permissions = []
-        if view.basename == "organization":
-            for scope in cls.get_scopes(request, view, obj):
-                self = cls.create_base_perm(request, view, scope, iam_context, obj)
-                permissions.append(self)
+        for scope in cls.get_scopes(request, view, obj):
+            self = cls.create_base_perm(request, view, scope, iam_context, obj)
+            permissions.append(self)
 
         return permissions
 
@@ -58,6 +59,12 @@ class OrganizationPermission(OpenPolicyAgentPermission):
         else:
             return None
 
+    def get_opa_settings_payload(self):
+        return {
+            **super().get_opa_settings_payload(),
+            "organizations_min_role_to_create": settings.ORGANIZATIONS_MIN_ROLE_TO_CREATE,
+        }
+
 
 class InvitationPermission(OpenPolicyAgentPermission):
     class Scopes(StrEnum):
@@ -72,12 +79,11 @@ class InvitationPermission(OpenPolicyAgentPermission):
     @classmethod
     def create(cls, request, view, obj, iam_context):
         permissions = []
-        if view.basename == "invitation":
-            for scope in cls.get_scopes(request, view, obj):
-                self = cls.create_base_perm(
-                    request, view, scope, iam_context, obj, role=request.data.get("role")
-                )
-                permissions.append(self)
+        for scope in cls.get_scopes(request, view, obj):
+            self = cls.create_base_perm(
+                request, view, scope, iam_context, obj, role=request.data.get("role")
+            )
+            permissions.append(self)
 
         return permissions
 
@@ -94,9 +100,6 @@ class InvitationPermission(OpenPolicyAgentPermission):
                 "list": Scopes.LIST,
                 "create": Scopes.CREATE,
                 "destroy": Scopes.DELETE,
-                "partial_update": (
-                    Scopes.ACCEPT if "accepted" in request.query_params else Scopes.RESEND
-                ),
                 "retrieve": Scopes.VIEW,
                 "accept": Scopes.ACCEPT,
                 "decline": Scopes.DECLINE,
@@ -118,7 +121,7 @@ class InvitationPermission(OpenPolicyAgentPermission):
                 "owner": {"id": self.user_id},
                 "invitee": {"id": None},  # unknown yet
                 "role": self.role,
-                "organization": {"id": self.org_id} if self.org_id is not None else None,
+                "organization": self.make_id_dict(self.org_id),
             }
 
         return data
@@ -135,14 +138,13 @@ class MembershipPermission(OpenPolicyAgentPermission):
     @classmethod
     def create(cls, request, view, obj, iam_context):
         permissions = []
-        if view.basename == "membership":
-            for scope in cls.get_scopes(request, view, obj):
-                params = {}
-                if scope == "change:role":
-                    params["role"] = request.data.get("role")
+        for scope in cls.get_scopes(request, view, obj):
+            params = {}
+            if scope == cls.Scopes.UPDATE_ROLE:
+                params["role"] = request.data.get("role")
 
-                self = cls.create_base_perm(request, view, scope, iam_context, obj, **params)
-                permissions.append(self)
+            self = cls.create_base_perm(request, view, scope, iam_context, obj, **params)
+            permissions.append(self)
 
         return permissions
 
@@ -180,6 +182,7 @@ class MembershipPermission(OpenPolicyAgentPermission):
         if self.obj:
             return {
                 "role": self.obj.role,
+                "new_role": getattr(self, "role", None),
                 "is_active": self.obj.is_active,
                 "user": {"id": self.obj.user_id},
                 "organization": {"id": self.obj.organization_id},

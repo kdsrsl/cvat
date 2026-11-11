@@ -8,6 +8,7 @@ import { useSelector } from 'react-redux';
 import { CombinedState } from 'reducers';
 import Button from 'antd/lib/button';
 import { Key } from 'antd/lib/table/interface';
+import Space from 'antd/lib/space';
 import Icon, { DeleteOutlined } from '@ant-design/icons';
 
 import { RestoreIcon } from 'icons';
@@ -59,7 +60,7 @@ function AllocationTable(props: Readonly<Props>): JSX.Element | null {
     }));
 
     const renderExtras = useCallback((): JSX.Element => (
-        <>
+        <Space>
             <DeleteOutlined
                 className='cvat-allocation-selection-frame-delete'
                 onClick={() => {
@@ -81,7 +82,7 @@ function AllocationTable(props: Readonly<Props>): JSX.Element | null {
                 }}
                 component={RestoreIcon}
             />
-        </>
+        </Space>
     ), [selection, onDeleteFrames, onRestoreFrames]);
 
     const { width: pageWidth, height: pageHeight } = pageSizeData;
@@ -171,6 +172,7 @@ function AllocationTable(props: Readonly<Props>): JSX.Element | null {
 
     return (
         <CVATTable
+            stateKey={`allocation-task-${task.id}`}
             tableTitle='Frames'
             searchDataIndex={['name']}
             csvExport={{ filename: `allocation-table-task_${task.id}.csv` }}
@@ -202,7 +204,7 @@ function AllocationTable(props: Readonly<Props>): JSX.Element | null {
 
 function AllocationTableWrap(props: Readonly<Props>): JSX.Element {
     const overrides = useSelector(
-        (state: CombinedState) => state.plugins.overridableComponents.qualityControlPage.allocationTable,
+        (state: CombinedState) => state.plugins.overridableComponents.qualityControlPage.task.allocationTable,
     );
 
     if (overrides.length) {

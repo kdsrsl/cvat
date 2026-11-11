@@ -17,6 +17,7 @@ import {
     updateAnnotationsAsync,
 } from 'actions/annotation-actions';
 import isAbleToChangeFrame from 'utils/is-able-to-change-frame';
+import getHiddenZLayers from 'utils/get-hidden-z-layers';
 import GlobalHotKeys, { KeyMap } from 'utils/mousetrap-react';
 import { ThunkDispatch } from 'utils/redux';
 import AppearanceBlock from 'components/annotation-page/appearance-block';
@@ -27,7 +28,7 @@ import { ShortcutScope } from 'utils/enums';
 import { subKeyMap } from 'utils/component-subkeymap';
 import AttributeEditor from './attribute-editor';
 import AttributeSwitcher from './attribute-switcher';
-import ObjectBasicsEditor from './object-basics-edtior';
+import ObjectBasicsEditor from './object-basics-editor';
 import ObjectSwitcher from './object-switcher';
 
 interface StateToProps {
@@ -38,7 +39,7 @@ interface StateToProps {
     keyMap: KeyMap;
     normalizedKeyMap: Record<string, string>;
     canvasIsReady: boolean;
-    curZLayer: number;
+    hiddenZLayers: Set<number>;
 }
 
 interface DispatchToProps {
@@ -62,18 +63,6 @@ const componentShortcuts = {
         name: 'Previous attribute',
         description: 'Go to the previous attribute',
         sequences: ['up'],
-        scope: ShortcutScope.ATTRIBUTE_ANNOTATION_WORKSPACE,
-    },
-    NEXT_OBJECT: {
-        name: 'Next object',
-        description: 'Go to the next object',
-        sequences: ['tab'],
-        scope: ShortcutScope.ATTRIBUTE_ANNOTATION_WORKSPACE,
-    },
-    PREVIOUS_OBJECT: {
-        name: 'Previous object',
-        description: 'Go to the previous object',
-        sequences: ['shift+tab'],
         scope: ShortcutScope.ATTRIBUTE_ANNOTATION_WORKSPACE,
     },
     SWITCH_LOCK: {
@@ -117,7 +106,6 @@ function mapStateToProps(state: CombinedState): StateToProps {
                 activatedStateID,
                 activatedAttributeID,
                 states,
-                zLayer: { cur },
             },
             job: { labels },
             canvas: { ready: canvasIsReady },
@@ -133,7 +121,7 @@ function mapStateToProps(state: CombinedState): StateToProps {
         keyMap,
         normalizedKeyMap,
         canvasIsReady,
-        curZLayer: cur,
+        hiddenZLayers: getHiddenZLayers(state),
     };
 }
 
@@ -163,10 +151,12 @@ function AttributeAnnotationSidebar(props: StateToProps & DispatchToProps): JSX.
         keyMap,
         normalizedKeyMap,
         canvasIsReady,
-        curZLayer,
+        hiddenZLayers,
     } = props;
 
-    const filteredStates = states.filter((state) => !state.outside && !state.hidden && state.zOrder <= curZLayer);
+    const filteredStates = states.filter((state) => (
+        !state.outside && !state.hidden && !hiddenZLayers.has(state.zOrder)
+    ));
     const [labelAttrMap, setLabelAttrMap] = useState(
         labels.reduce((acc, label): LabelAttrMap => {
             acc[label.id] = label.attributes.length ? label.attributes[0] : null;
@@ -259,7 +249,7 @@ function AttributeAnnotationSidebar(props: StateToProps & DispatchToProps): JSX.
     const siderProps: SiderProps = {
         className: 'attribute-annotation-sidebar',
         theme: 'light',
-        width: 300,
+        width: 320,
         collapsedWidth: 0,
         reverseArrow: true,
         collapsible: true,
@@ -281,14 +271,6 @@ function AttributeAnnotationSidebar(props: StateToProps & DispatchToProps): JSX.
         PREVIOUS_ATTRIBUTE: (event: KeyboardEvent | undefined) => {
             preventDefault(event);
             nextAttribute(-1);
-        },
-        NEXT_OBJECT: (event: KeyboardEvent | undefined) => {
-            preventDefault(event);
-            nextObject(1);
-        },
-        PREVIOUS_OBJECT: (event: KeyboardEvent | undefined) => {
-            preventDefault(event);
-            nextObject(-1);
         },
         SWITCH_LOCK: (event: KeyboardEvent | undefined) => {
             preventDefault(event);
@@ -363,7 +345,6 @@ function AttributeAnnotationSidebar(props: StateToProps & DispatchToProps): JSX.
                     }}
                 />
                 <ObjectButtonsContainer
-                    readonly={false}
                     clientID={activeObjectState.clientID}
                     outsideDisabled
                     hiddenDisabled

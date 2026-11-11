@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 import * as SVG from 'svg.js';
-import { expandChannels, imageDataToDataURL, translateToSVG } from './shared';
+import { RLEToImageData, imageDataToDataURL, translateToSVG } from './shared';
 import { Geometry } from './canvasModel';
 import consts from './consts';
 
@@ -11,15 +11,26 @@ export interface SelectionFilter {
     objectType?: string[];
     shapeType?: string[];
     maxCount?: number;
+    restrictToFirstSelectedType?: boolean;
+    // when true, a shape is selected if its bounding box intersects the selection box
+    // (default behaviour requires the selection box to fully contain the shape)
+    intersect?: boolean;
+    // keep the regular object appearance while the consumer renders persistent selection feedback
+    preserveAppearance?: boolean;
+    // clear the previous selector result when a new selection box starts
+    replaceOnSelection?: boolean;
 }
 
 export interface ObjectSelector {
     enable(
         callback: (selected: ObjectState[]) => void,
         filter?: SelectionFilter,
+        initialEvent?: MouseEvent,
     ): void;
     transform(geometry: Geometry): void;
     push(state: ObjectState): void;
+    setSelected(states: ObjectState[], notify?: boolean): void;
+    move(event: MouseEvent): void;
     disable(): void;
     resetSelected(): void;
 }
@@ -33,6 +44,8 @@ export class ObjectSelectorImpl implements ObjectSelector {
     private geometry: Geometry;
     private isEnabled: boolean;
     private mouseDownPosition: { x: number; y: number; };
+    private mouseDownClientPosition: { x: number; y: number; };
+    private selectionWasDragged: boolean;
     private selectedObjects: Record<number, ObjectState>;
     private resetAppearance: Record<number, () => void>;
     private findObjectOnClick: (event: MouseEvent) => void;
@@ -54,6 +67,8 @@ export class ObjectSelectorImpl implements ObjectSelector {
         this.selectedObjects = {};
         this.resetAppearance = {};
         this.mouseDownPosition = { x: 0, y: 0 };
+        this.mouseDownClientPosition = { x: 0, y: 0 };
+        this.selectionWasDragged = false;
         this.selectionFilter = null;
     }
 
@@ -76,10 +91,25 @@ export class ObjectSelectorImpl implements ObjectSelector {
         let count = Object.keys(this.selectedObjects).length;
         const maxCount = this.selectionFilter.maxCount || Number.MAX_SAFE_INTEGER;
         const filtered = [];
+
+        let effectiveShapeTypes = this.selectionFilter.shapeType;
+        if (
+            this.selectionFilter.restrictToFirstSelectedType &&
+            count > 0 &&
+            effectiveShapeTypes &&
+            effectiveShapeTypes.length > 1
+        ) {
+            const firstSelected = Object.values(this.selectedObjects)[0];
+            effectiveShapeTypes = [firstSelected.shapeType];
+        }
+
         for (const state of states) {
+            if (state.hidden || state.outside) {
+                continue;
+            }
             const { objectType, shapeType } = state;
             const objectTypes = this.selectionFilter.objectType || [objectType];
-            const shapeTypes = this.selectionFilter.shapeType || [shapeType];
+            const shapeTypes = effectiveShapeTypes || [shapeType];
             if (objectTypes.includes(objectType) && shapeTypes.includes(shapeType)) {
                 if (count < maxCount) {
                     filtered.push(state);
@@ -92,8 +122,13 @@ export class ObjectSelectorImpl implements ObjectSelector {
     }
 
     private onMouseDown = (event: MouseEvent): void => {
+        if (event.button !== 0) {
+            return;
+        }
         const point = translateToSVG((this.canvas.node as any) as SVGSVGElement, [event.clientX, event.clientY]);
         this.mouseDownPosition = { x: point[0], y: point[1] };
+        this.mouseDownClientPosition = { x: event.clientX, y: event.clientY };
+        this.selectionWasDragged = false;
         this.selectionRect = this.canvas.rect().addClass('cvat_canvas_selection_box');
         this.selectionRect.attr({ 'stroke-width': consts.BASE_STROKE_WIDTH / this.geometry.scale });
         this.selectionRect.attr({ ...this.mouseDownPosition });
@@ -106,19 +141,38 @@ export class ObjectSelectorImpl implements ObjectSelector {
 
             const states = this.getStates();
             const box = this.getSelectionBox(event);
+            const movedBeyondClickThreshold = Math.hypot(
+                event.clientX - this.mouseDownClientPosition.x,
+                event.clientY - this.mouseDownClientPosition.y,
+            ) > 2;
+            this.selectionWasDragged ||= movedBeyondClickThreshold;
+            const isClick = !this.selectionWasDragged;
+            if (this.selectionFilter?.replaceOnSelection && isClick) {
+                return;
+            }
+            if (this.selectionFilter?.replaceOnSelection) {
+                this.resetAllAppearances();
+                this.selectedObjects = {};
+            }
             const shapes = (this.canvas.select('.cvat_canvas_shape') as any).members.filter(
                 (shape: SVG.Shape): boolean => !shape.hasClass('cvat_canvas_hidden'),
             );
 
+            const intersect = !!this.selectionFilter?.intersect;
             let newStates = [];
             for (const shape of shapes) {
-                const bbox = shape.bbox();
+                const bbox = shape.rbox(this.canvas);
                 const clientID = shape.attr('clientID');
+                const contained = bbox.x >= box.xtl &&
+                    bbox.y >= box.ytl &&
+                    bbox.x + bbox.width <= box.xbr &&
+                    bbox.y + bbox.height <= box.ybr;
+                const intersected = bbox.x < box.xbr &&
+                    bbox.x + bbox.width > box.xtl &&
+                    bbox.y < box.ybr &&
+                    bbox.y + bbox.height > box.ytl;
                 if (
-                    bbox.x > box.xtl &&
-                    bbox.y > box.ytl &&
-                    bbox.x + bbox.width < box.xbr &&
-                    bbox.y + bbox.height < box.ybr &&
+                    (intersect ? intersected : contained) &&
                     !(clientID in this.selectedObjects)
                 ) {
                     const objectState = states.find((state: ObjectState): boolean => state.clientID === clientID);
@@ -129,17 +183,19 @@ export class ObjectSelectorImpl implements ObjectSelector {
             }
 
             newStates = this.filterObjects(newStates);
-            if (newStates.length) {
-                newStates.forEach((_state) => {
-                    this.selectedObjects[_state.clientID] = _state;
-                });
-                this.onSelectCallback(Object.values(this.selectedObjects));
-            }
+            newStates.forEach((_state) => {
+                this.selectedObjects[_state.clientID] = _state;
+            });
+            this.onSelectCallback(Object.values(this.selectedObjects));
         }
     };
 
     private onMouseMove = (event: MouseEvent): void => {
         if (this.selectionRect) {
+            this.selectionWasDragged ||= Math.hypot(
+                event.clientX - this.mouseDownClientPosition.x,
+                event.clientY - this.mouseDownClientPosition.y,
+            ) > 2;
             const box = this.getSelectionBox(event);
             this.selectionRect.attr({
                 x: box.xtl,
@@ -150,16 +206,40 @@ export class ObjectSelectorImpl implements ObjectSelector {
         }
     };
 
-    public enable(callback: (selected: ObjectState[]) => void, filter?: SelectionFilter): void {
+    private suppressClickAfterSelectionDrag = (event: MouseEvent): void => {
+        if (this.selectionWasDragged) {
+            this.selectionWasDragged = false;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }
+    };
+
+    private resetAllAppearances(): void {
+        for (const clientID of Object.keys(this.resetAppearance)) {
+            this.resetAppearance[clientID]();
+        }
+        this.resetAppearance = {};
+    }
+
+    public enable(
+        callback: (selected: ObjectState[]) => void,
+        filter?: SelectionFilter,
+        initialEvent?: MouseEvent,
+    ): void {
         if (!this.isEnabled) {
             window.document.addEventListener('mouseup', this.onMouseUp);
             this.canvas.node.addEventListener('mousedown', this.onMouseDown);
             this.canvas.node.addEventListener('mousemove', this.onMouseMove);
+            this.canvas.node.addEventListener('click', this.suppressClickAfterSelectionDrag, true);
             this.canvas.node.addEventListener('click', this.findObjectOnClick);
 
             this.selectedObjects = {};
             this.onSelectCallback = (_selected: ObjectState[]): void => {
                 const appendToSelection = (objectState: ObjectState): (() => void) => {
+                    if (this.selectionFilter.preserveAppearance) {
+                        return () => {};
+                    }
+
                     const { clientID } = objectState;
                     const shape = this.canvas.select(`#cvat_canvas_shape_${clientID}`).first();
                     if (shape) {
@@ -168,7 +248,7 @@ export class ObjectSelectorImpl implements ObjectSelector {
                             const { points } = objectState;
                             const colorRGB = [252, 251, 252];
                             const [left, top, right, bottom] = points.slice(-4);
-                            const imageBitmap = expandChannels(colorRGB[0], colorRGB[1], colorRGB[2], points);
+                            const imageBitmap = RLEToImageData(colorRGB[0], colorRGB[1], colorRGB[2], points);
 
                             const bbox = shape.bbox();
                             const image = this.canvas.image().attr({
@@ -182,20 +262,26 @@ export class ObjectSelectorImpl implements ObjectSelector {
                                 imageBitmap,
                                 right - left + 1,
                                 bottom - top + 1,
-                                (dataURL: string) => new Promise((resolve, reject) => {
-                                    image.loaded(() => {
-                                        resolve();
-                                    });
-                                    image.error(() => {
-                                        reject();
-                                    });
-                                    image.load(dataURL);
-                                }),
+                                (dataURL: string) => {
+                                    const destroy = (): void => URL.revokeObjectURL(dataURL);
+                                    if (image.parent() !== null) {
+                                        // still in DOM
+                                        image.loaded(destroy);
+                                        image.error(destroy);
+                                        image.load(dataURL);
+                                    } else {
+                                        destroy();
+                                    }
+                                },
                             );
 
                             image.style('filter', 'drop-shadow(2px 4px 6px black)'); // for better visibility
                             image.attr('opacity', 0.5);
+
                             return () => {
+                                if (image.node instanceof SVGImageElement) {
+                                    URL.revokeObjectURL(image.node.href.baseVal);
+                                }
                                 image.remove();
                                 shape.removeClass('cvat_canvas_shape_selection');
                             };
@@ -225,6 +311,13 @@ export class ObjectSelectorImpl implements ObjectSelector {
 
             this.selectionFilter = filter;
             this.isEnabled = true;
+
+            if (initialEvent) {
+                // start the selection box immediately from the triggering mousedown
+                // (used by shift + left-mousedown selection, where the listeners below
+                // are attached only after the initial press has already happened)
+                this.onMouseDown(initialEvent);
+            }
         }
     }
 
@@ -232,19 +325,14 @@ export class ObjectSelectorImpl implements ObjectSelector {
         window.document.removeEventListener('mouseup', this.onMouseUp);
         this.canvas.node.removeEventListener('mousedown', this.onMouseDown);
         this.canvas.node.removeEventListener('mousemove', this.onMouseMove);
+        this.canvas.node.removeEventListener('click', this.suppressClickAfterSelectionDrag, true);
         this.canvas.node.removeEventListener('click', this.findObjectOnClick);
 
-        if (this.selectionRect) {
-            this.selectionRect.remove();
-            this.selectionRect = null;
-        }
+        this.selectionRect?.remove();
+        this.selectionRect = null;
 
-        for (const clientID of Object.keys(this.resetAppearance)) {
-            this.resetAppearance[clientID]();
-        }
-
+        this.resetAllAppearances();
         this.onSelectCallback = null;
-        this.resetAppearance = {};
         this.isEnabled = false;
     }
 
@@ -265,6 +353,18 @@ export class ObjectSelectorImpl implements ObjectSelector {
         }
     }
 
+    public setSelected(states: ObjectState[], notify = true): void {
+        if (this.isEnabled) {
+            const visibleStates = states.filter((state) => !state.hidden && !state.outside);
+            this.selectedObjects = Object.fromEntries(visibleStates.map((state) => [state.clientID, state]));
+            if (notify) this.onSelectCallback(visibleStates);
+        }
+    }
+
+    public move(event: MouseEvent): void {
+        this.onMouseMove(event);
+    }
+
     public transform(geometry: Geometry): void {
         this.geometry = geometry;
         if (this.selectionRect) {
@@ -274,12 +374,8 @@ export class ObjectSelectorImpl implements ObjectSelector {
 
     public resetSelected(): void {
         if (this.isEnabled) {
-            for (const clientID of Object.keys(this.resetAppearance)) {
-                this.resetAppearance[clientID]();
-            }
             this.selectedObjects = {};
-            this.resetAppearance = {};
-
+            this.resetAllAppearances();
             if (this.onSelectCallback) {
                 this.onSelectCallback([]);
             }

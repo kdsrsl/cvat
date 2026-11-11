@@ -3,8 +3,9 @@
 //
 // SPDX-License-Identifier: MIT
 
-import { snakeCase } from 'lodash';
+import { camelCase, snakeCase } from 'lodash';
 import { ArgumentError } from './exceptions';
+import { CamelizedV2 } from './type-utils';
 
 export function isBoolean(value): boolean {
     return typeof value === 'boolean';
@@ -15,7 +16,7 @@ export function isInteger(value): boolean {
 }
 
 export function isEmail(value): boolean {
-    return typeof value === 'string' && RegExp(/^[^\s@]+@[^\s@]+\.[^\s@]+$/).test(value);
+    return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 // Called with specific Enum context
@@ -66,7 +67,15 @@ export function checkExclusiveFields(obj, exclusive, ignore): void {
     }
 }
 
-export function checkObjectType(name, value, type, instance?): boolean {
+export function checkObjectType(
+    name: string,
+    value: unknown,
+    type: 'string' | 'number' | 'boolean' | 'integer' | null,
+    constructor?: {
+        cls: new (...args: any[]) => unknown,
+        name: string,
+    },
+): boolean {
     if (type) {
         if (typeof value !== type) {
             // specific case for integers which aren't native type in JS
@@ -76,16 +85,13 @@ export function checkObjectType(name, value, type, instance?): boolean {
 
             throw new ArgumentError(`"${name}" is expected to be "${type}", but "${typeof value}" received.`);
         }
-    } else if (instance) {
-        if (!(value instanceof instance)) {
+    } else if (constructor) {
+        if (!(value instanceof constructor.cls)) {
             if (value !== undefined) {
-                throw new ArgumentError(
-                    `"${name}" is expected to be ${instance.name}, but ` +
-                        `"${value.constructor.name}" received`,
-                );
+                throw new ArgumentError(`"${name}" is expected to be instance of ${constructor.name}.`);
             }
 
-            throw new ArgumentError(`"${name}" is expected to be ${instance.name}, but "undefined" received`);
+            throw new ArgumentError(`"${name}" is expected to be ${constructor.name}, but "undefined" received`);
         }
     }
 
@@ -121,51 +127,21 @@ export class FieldUpdateTrigger {
     }
 
     getUpdated(data: object, propMap: Record<string, string> = {}): Record<string, unknown> {
-        const result = {};
+        const source = data as Record<string, unknown>;
+        const result: Record<string, unknown> = {};
         for (const updatedField of Object.keys(this.#updatedFlags)) {
-            result[propMap[updatedField] || updatedField] = data[updatedField];
+            result[propMap[updatedField] || updatedField] = source[updatedField];
         }
         return result;
     }
-}
-
-export function clamp(value: number, min: number, max: number): number {
-    return Math.min(Math.max(value, min), max);
 }
 
 export function camelToSnakeCase(str: string): string {
     return str.replace(/[A-Z]/g, (letter: string) => `_${letter.toLowerCase()}`);
 }
 
-export function filterFieldsToSnakeCase(filter: Record<string, string>, keysToSnake: string[]): Record<string, string> {
-    const searchParams:Record<string, string> = {};
-    for (const key of Object.keys(filter)) {
-        if (!keysToSnake.includes(key)) {
-            searchParams[key] = filter[key];
-        }
-    }
-    const filtersGroup = [];
-    for (const key of keysToSnake) {
-        if (filter[key]) {
-            filtersGroup.push({ '==': [{ var: camelToSnakeCase(key) }, filter[key]] });
-        }
-    }
-
-    if (searchParams.filter) {
-        const parsed = JSON.parse(searchParams.filter);
-        searchParams.filter = JSON.stringify({ and: [parsed, ...filtersGroup] });
-    } else if (filtersGroup.length) {
-        searchParams.filter = JSON.stringify({ and: [...filtersGroup] });
-    }
-    return searchParams;
-}
-
 export function isResourceURL(url: string): boolean {
     return /\/([0-9]+)$/.test(url);
-}
-
-export function isPageSize(value: number | 'all'): boolean {
-    return isInteger(value) || value === 'all';
 }
 
 export function fieldsToSnakeCase(params: Record<string, any>): Record<string, any> {
@@ -174,4 +150,39 @@ export function fieldsToSnakeCase(params: Record<string, any>): Record<string, a
         result[snakeCase(k)] = v;
     }
     return result;
+}
+
+export function fieldsToCamelCase<T extends object>(params: T): CamelizedV2<T> {
+    return Object.entries(params).reduce((acc, [key, value]) => {
+        acc[camelCase(key)] = value;
+        return acc;
+    }, {} as Record<string, unknown>) as CamelizedV2<T>;
+}
+
+export function filterFieldsToSnakeCase(
+    filter: Record<string, string | number>,
+    keysToSnake: string[],
+): Record<string, string | number> {
+    let searchParams: Record<string, string | number> = {};
+    for (const key of Object.keys(filter)) {
+        if (!keysToSnake.includes(key)) {
+            searchParams[key] = filter[key];
+        }
+    }
+    searchParams = fieldsToSnakeCase(searchParams);
+
+    const filtersGroup = [];
+    for (const key of keysToSnake) {
+        if (filter[key]) {
+            filtersGroup.push({ '==': [{ var: camelToSnakeCase(key) }, filter[key]] });
+        }
+    }
+
+    if (typeof searchParams.filter === 'string') {
+        const parsed = JSON.parse(searchParams.filter);
+        searchParams.filter = JSON.stringify({ and: [parsed, ...filtersGroup] });
+    } else if (filtersGroup.length) {
+        searchParams.filter = JSON.stringify({ and: [...filtersGroup] });
+    }
+    return searchParams;
 }

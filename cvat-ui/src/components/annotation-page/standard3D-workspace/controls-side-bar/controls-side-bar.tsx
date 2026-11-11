@@ -51,7 +51,7 @@ const componentShortcuts: Record<string, KeyMapItem> = {
     PASTE_SHAPE: {
         name: 'Paste shape',
         description: 'Paste a shape from internal CVAT clipboard',
-        sequences: ['ctrl+v'],
+        sequences: ['ctrl+v', 'command+v'],
         scope: ShortcutScope.OBJECTS_SIDEBAR,
     },
     SWITCH_DRAW_MODE_STANDARD_3D_CONTROLS: {
@@ -95,12 +95,12 @@ const componentShortcuts: Record<string, KeyMapItem> = {
 
 registerComponentShortcuts(componentShortcuts);
 
-const ObservedCursorControl = ControlVisibilityObserver<CursorControlProps>(CursorControl);
-const ObservedMoveControl = ControlVisibilityObserver<MoveControlProps>(MoveControl);
-const ObservedDrawCuboidControl = ControlVisibilityObserver<DrawCuboidControlProps>(DrawCuboidControl);
-const ObservedGroupControl = ControlVisibilityObserver<GroupControlProps>(GroupControl);
-const ObservedMergeControl = ControlVisibilityObserver<MergeControlProps>(MergeControl);
-const ObservedSplitControl = ControlVisibilityObserver<SplitControlProps>(SplitControl);
+const ObservedCursorControl = ControlVisibilityObserver<CursorControlProps>(CursorControl, 'CursorControl');
+const ObservedMoveControl = ControlVisibilityObserver<MoveControlProps>(MoveControl, 'MoveControl');
+const ObservedDrawCuboidControl = ControlVisibilityObserver<DrawCuboidControlProps>(DrawCuboidControl, 'DrawCuboidControl');
+const ObservedGroupControl = ControlVisibilityObserver<GroupControlProps>(GroupControl, 'GroupControl');
+const ObservedMergeControl = ControlVisibilityObserver<MergeControlProps>(MergeControl, 'MergeControl');
+const ObservedSplitControl = ControlVisibilityObserver<SplitControlProps>(SplitControl, 'SplitControl');
 
 export default function ControlsSideBarComponent(props: Props): JSX.Element {
     const {
@@ -157,22 +157,22 @@ export default function ControlsSideBarComponent(props: Props): JSX.Element {
             };
 
     const dynamicGroupIconProps =
-    activeControl === ActiveControl.GROUP ?
-        {
-            className: 'cvat-group-control cvat-active-canvas-control',
-            onClick: (): void => {
-                canvasInstance.group({ enabled: false });
-                updateActiveControl(ActiveControl.CURSOR);
-            },
-        } :
-        {
-            className: 'cvat-group-control',
-            onClick: (): void => {
-                canvasInstance.cancel();
-                canvasInstance.group({ enabled: true });
-                updateActiveControl(ActiveControl.GROUP);
-            },
-        };
+        activeControl === ActiveControl.GROUP ?
+            {
+                className: 'cvat-group-control cvat-active-canvas-control',
+                onClick: (): void => {
+                    canvasInstance.group({ enabled: false });
+                    updateActiveControl(ActiveControl.CURSOR);
+                },
+            } :
+            {
+                className: 'cvat-group-control',
+                onClick: (): void => {
+                    canvasInstance.cancel();
+                    canvasInstance.group({ enabled: true });
+                    updateActiveControl(ActiveControl.GROUP);
+                },
+            };
 
     const dynamicTrackIconProps = activeControl === ActiveControl.SPLIT ?
         {

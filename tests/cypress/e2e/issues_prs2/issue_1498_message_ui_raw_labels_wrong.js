@@ -28,6 +28,7 @@ context('Message in UI when raw labels are wrong.', () => {
     ];
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTask(taskName);
         cy.get('[role="tab"]').contains('Raw').click();
     });
@@ -107,7 +108,7 @@ context('Message in UI when raw labels are wrong.', () => {
                 });
         });
         it('Label "attributes input_type" is incorrect.', () => {
-            const inputTypes = ['select radio', 'textt', 'nnumber'];
+            const inputTypes = ['select radio', 'textt', 'nnumber']; // spellchecker:disable-line
             const taskRawAttrTypeNumber = JSON.parse(JSON.stringify(taskRaw));
             for (const type of inputTypes) {
                 taskRawAttrTypeNumber[0].attributes[0].input_type = type;
@@ -181,6 +182,34 @@ context('Message in UI when raw labels are wrong.', () => {
                 .then(($explainText) => {
                     cy.task('log', `- "${$explainText}"`);
                 });
+        });
+        it('Label "attributes values" is a valid number range with a repeating bound.', () => {
+            // a number attribute keeps [minimum, maximum, step] in "values", so a range
+            // like 1;4;1 repeats a value without being a duplicated option
+            const taskRawNumberRange = JSON.parse(JSON.stringify(taskRaw));
+            taskRawNumberRange[0].type = 'any';
+            taskRawNumberRange[0].attributes[0].input_type = 'number';
+            taskRawNumberRange[0].attributes[0].values = ['1', '4', '1'];
+            const jsonNumberRange = JSON.stringify(taskRawNumberRange);
+            cy.get('#labels').type(jsonNumberRange, { parseSpecialCharSequences: false });
+            cy.get('.ant-form-item-explain-error').should('not.exist');
+        });
+        it('Label "attributes values" is an invalid number range.', () => {
+            const invalidRanges = [
+                [['4', '1', '1'], 'minimum must be less than maximum'],
+                [['1', '4', '5'], 'step must be less than minmax difference'],
+                [['1', '4', '0'], 'step must be a positive number'],
+            ];
+            const taskRawInvalidRange = JSON.parse(JSON.stringify(taskRaw));
+            taskRawInvalidRange[0].type = 'any';
+            taskRawInvalidRange[0].attributes[0].input_type = 'number';
+            for (const [values, message] of invalidRanges) {
+                taskRawInvalidRange[0].attributes[0].values = values;
+                const jsonInvalidRange = JSON.stringify(taskRawInvalidRange);
+                cy.get('#labels').type(jsonInvalidRange, { parseSpecialCharSequences: false });
+                cy.get('.ant-form-item-explain-error').should('contain.text', message);
+                cy.get('#labels').clear();
+            }
         });
     });
 });

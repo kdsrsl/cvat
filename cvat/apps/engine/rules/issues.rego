@@ -124,26 +124,15 @@ allow if {
 }
 
 allow if {
-    input.scope == utils.CREATE_IN_JOB
-    utils.is_sandbox
-    utils.has_perm(utils.WORKER)
-    is_job_staff
-}
-
-allow if {
-    input.scope == utils.CREATE_IN_JOB
-    input.auth.organization.id == input.resource.organization.id
-    utils.is_organization
+    input.scope in {utils.CREATE_IN_JOB, utils.DELETE, utils.UPDATE, utils.VIEW}
+    organizations.is_same_org_as_resource_with_perm(organizations.MAINTAINER)
     utils.has_perm(utils.USER)
-    organizations.has_perm(organizations.MAINTAINER)
 }
 
 allow if {
     input.scope == utils.CREATE_IN_JOB
-    input.auth.organization.id == input.resource.organization.id
-    utils.is_organization
+    organizations.is_same_context_as_resource
     utils.has_perm(utils.WORKER)
-    organizations.is_member
     is_job_staff
 }
 
@@ -157,106 +146,56 @@ allow if {
     organizations.is_member
 }
 
-filter := [] if { # Django Q object to filter list of entries
+base_filter := {} if { # Django Q object to filter list of entries
     utils.is_admin
-    utils.is_sandbox
-} else := qobject if {
-    utils.is_admin
-    utils.is_organization
-    org := input.auth.organization
-    qobject := [
-        {"job__segment__task__organization": org.id},
-        {"job__segment__task__project__organization": org.id}, "|"
-    ]
 } else := qobject if {
     utils.is_sandbox
     user := input.auth.user
-    qobject := [
-        {"owner": user.id}, {"assignee": user.id}, "|",
-        {"job__assignee": user.id}, "|",
-        {"job__segment__task__owner": user.id}, "|",
-        {"job__segment__task__assignee": user.id}, "|",
-        {"job__segment__task__project__owner": user.id}, "|",
-        {"job__segment__task__project__assignee": user.id}, "|"
+    qobject := ["|",
+        {"owner": user.id},
+        {"assignee": user.id},
+        {"job__assignee": user.id},
+        {"job__segment__task__owner": user.id},
+        {"job__segment__task__assignee": user.id},
+        {"job__segment__task__project__owner": user.id},
+        {"job__segment__task__project__assignee": user.id},
     ]
-} else := qobject if {
+} else := {} if {
     utils.is_organization
     utils.has_perm(utils.USER)
     organizations.has_perm(organizations.MAINTAINER)
-    org := input.auth.organization
-    qobject := [
-        {"job__segment__task__organization": org.id},
-        {"job__segment__task__project__organization": org.id}, "|"
-    ]
 } else := qobject if {
     organizations.has_perm(organizations.WORKER)
     user := input.auth.user
-    org := input.auth.organization
-    qobject := [
-        {"owner": user.id}, {"assignee": user.id}, "|",
-        {"job__assignee": user.id}, "|",
-        {"job__segment__task__owner": user.id}, "|",
-        {"job__segment__task__assignee": user.id}, "|",
-        {"job__segment__task__project__owner": user.id}, "|",
-        {"job__segment__task__project__assignee": user.id}, "|",
-        {"job__segment__task__organization": org.id},
-        {"job__segment__task__project__organization": org.id}, "|", "&"
+    qobject := ["|",
+        {"owner": user.id},
+        {"assignee": user.id},
+        {"job__assignee": user.id},
+        {"job__segment__task__owner": user.id},
+        {"job__segment__task__assignee": user.id},
+        {"job__segment__task__project__owner": user.id},
+        {"job__segment__task__project__assignee": user.id},
     ]
 }
 
-allow if {
-    input.scope == utils.VIEW
-    utils.is_sandbox
-    is_issue_staff
-}
+filter := utils.add_organization_filter(base_filter, ["job__segment__task__organization"])
 
 allow if {
     input.scope == utils.VIEW
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.USER)
-    organizations.has_perm(organizations.MAINTAINER)
-}
-
-allow if {
-    input.scope == utils.VIEW
-    input.auth.organization.id == input.resource.organization.id
-    organizations.is_member
+    organizations.is_same_context_as_resource
     is_issue_staff
 }
 
 allow if {
     input.scope == utils.UPDATE
-    utils.is_sandbox
+    organizations.is_same_context_as_resource
     utils.has_perm(utils.WORKER)
     is_issue_staff
 }
 
 allow if {
-    input.scope == utils.UPDATE
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.WORKER)
-    organizations.is_member
-    is_issue_staff
-}
-
-allow if {
     input.scope == utils.DELETE
-    utils.is_sandbox
+    organizations.is_same_context_as_resource
     utils.has_perm(utils.WORKER)
     is_issue_admin
-}
-
-allow if {
-    input.scope == utils.DELETE
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.WORKER)
-    organizations.is_member
-    is_issue_admin
-}
-
-allow if {
-    input.scope in {utils.UPDATE, utils.DELETE}
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.USER)
-    organizations.has_perm(organizations.MAINTAINER)
 }

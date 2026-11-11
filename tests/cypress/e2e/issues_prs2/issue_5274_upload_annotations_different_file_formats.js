@@ -9,7 +9,7 @@ import { taskName, labelName } from '../../support/const';
 context('Upload annotations in different file formats', () => {
     const issueId = '5274';
     const createRectangleTrack2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Track',
         labelName,
         firstX: 250,
@@ -34,6 +34,7 @@ context('Upload annotations in different file formats', () => {
     ];
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTaskJob(taskName);
         cy.createRectangle(createRectangleTrack2Points);
         cy.saveJob('PATCH', 200, 'saveJobDump');

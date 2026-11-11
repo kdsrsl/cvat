@@ -3,10 +3,11 @@
 #
 # SPDX-License-Identifier: MIT
 
+import shutil
+
 from datumaro.components.annotation import AnnotationType
 from datumaro.components.dataset import Dataset
 from datumaro.components.transformer import ItemTransform
-from pyunpack import Archive
 
 from cvat.apps.dataset_manager.bindings import (
     GetCVATDataExtractor,
@@ -17,7 +18,7 @@ from cvat.apps.dataset_manager.bindings import (
 from cvat.apps.dataset_manager.util import make_zip_archive
 
 from .registry import dm_env, exporter, importer
-from .transformations import MaskToPolygonTransformation, RotatedBoxesToPolygons
+from .transformations import EllipsesToMasks, MaskToPolygonTransformation, RotatedBoxesToPolygons
 
 
 class KeepTracks(ItemTransform):
@@ -109,6 +110,7 @@ def _export(dst_file, temp_dir, instance_data, save_images=False):
         dataset.transform(RotatedBoxesToPolygons)
         dataset.transform("polygons_to_masks")
         dataset.transform("boxes_to_masks")
+        dataset.transform(EllipsesToMasks)
         dataset.transform("merge_instance_segments")
 
         dataset.export(temp_dir, "mots_png", save_media=save_images)
@@ -118,7 +120,7 @@ def _export(dst_file, temp_dir, instance_data, save_images=False):
 
 @importer(name="MOTS PNG", ext="ZIP", version="1.0")
 def _import(src_file, temp_dir, instance_data, load_data_callback=None, **kwargs):
-    Archive(src_file.name).extractall(temp_dir)
+    shutil.unpack_archive(src_file.name, temp_dir, "zip")
 
     detect_dataset(temp_dir, format_name="mots", importer=dm_env.importers.get("mots"))
     dataset = Dataset.import_from(temp_dir, "mots", env=dm_env)

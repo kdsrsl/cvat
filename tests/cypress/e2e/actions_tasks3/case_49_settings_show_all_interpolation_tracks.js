@@ -9,7 +9,7 @@ import { taskName, labelName } from '../../support/const';
 context('Settings. "Show all interpolation tracks" option.', () => {
     const caseId = '49';
     const createRectangleTrack2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Track',
         labelName,
         firstX: 250,
@@ -19,6 +19,7 @@ context('Settings. "Show all interpolation tracks" option.', () => {
     };
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTaskJob(taskName);
         cy.createRectangle(createRectangleTrack2Points);
     });

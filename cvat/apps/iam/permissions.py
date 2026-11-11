@@ -5,18 +5,17 @@
 
 from __future__ import annotations
 
-import importlib
 import operator
 from abc import ABCMeta, abstractmethod
 from collections.abc import Sequence
-from enum import Enum
+from functools import cached_property, reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from attrs import define, field
 from django.apps import AppConfig
 from django.conf import settings
-from django.db.models import Model, Q
+from django.db.models import Q, Value
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
@@ -29,11 +28,6 @@ if TYPE_CHECKING:
     from rest_framework.viewsets import ViewSet
 
     from cvat.apps.engine.types import ExtendedRequest
-
-
-class StrEnum(str, Enum):
-    def __str__(self) -> str:
-        return self.value
 
 
 @define
@@ -84,12 +78,16 @@ def get_membership(request, organization):
     ).first()
 
 
+IamContext: TypeAlias = dict[str, Any]
+
+
 def build_iam_context(
-    request, organization: Optional[Organization], membership: Optional[Membership]
-):
+    request, organization: Organization | None, membership: Membership | None
+) -> IamContext:
     return {
         "user_id": request.user.id,
         "group_name": request.iam_context["privilege"],
+        "org_specified": request.iam_context["organization_specified"],
         "org_id": getattr(organization, "id", None),
         "org_slug": getattr(organization, "slug", None),
         "org_owner_id": organization.owner_id if organization else None,
@@ -107,12 +105,13 @@ def get_iam_context(request, obj) -> dict[str, Any]:
 class OpenPolicyAgentPermission(metaclass=ABCMeta):
     url: str
     user_id: int
-    group_name: Optional[str]
-    org_id: Optional[int]
-    org_owner_id: Optional[int]
-    org_role: Optional[str]
+    group_name: str | None
+    org_specified: bool
+    org_id: int | None
+    org_owner_id: int | None
+    org_role: str | None
     scope: str
-    obj: Optional[Any]
+    obj: Any | None
 
     @classmethod
     @abstractmethod
@@ -137,55 +136,87 @@ class OpenPolicyAgentPermission(metaclass=ABCMeta):
 
     @classmethod
     @abstractmethod
-    def create(cls, request, view, obj, iam_context) -> Sequence[OpenPolicyAgentPermission]: ...
+    def create(
+        cls,
+        request: ExtendedRequest,
+        view: ViewSet,
+        obj: Any | None,
+        iam_context: IamContext | None,
+    ) -> Sequence[OpenPolicyAgentPermission]: ...
 
     @classmethod
-    def create_base_perm(cls, request, view, scope, iam_context, obj=None, **kwargs):
+    def create_base_perm(
+        cls,
+        request: ExtendedRequest,
+        view,
+        scope,
+        iam_context: IamContext | None,
+        obj: Any | None = None,
+        **kwargs,
+    ):
         if not iam_context and request:
             iam_context = get_iam_context(request, obj)
+
         return cls(scope=scope, obj=obj, **iam_context, **kwargs)
 
     @classmethod
-    def create_scope_list(cls, request, iam_context=None):
+    def create_scope_list(cls, request: ExtendedRequest, iam_context: IamContext | None = None):
         if not iam_context and request:
             iam_context = get_iam_context(request, None)
+
         return cls(**iam_context, scope="list")
+
+    @cached_property
+    def payload(self):
+        return self.get_opa_payload()
+
+    def get_opa_payload(self):
+        return {
+            "input": {
+                "scope": self.scope,
+                "auth": self.get_opa_auth_payload(),
+                "resource": self.get_resource(),
+                "settings": self.get_opa_settings_payload(),
+            }
+        }
+
+    def get_opa_auth_payload(self):
+        return {
+            "user": {
+                "id": self.user_id,
+                "privilege": self.group_name,
+            },
+            "organization": (
+                {
+                    "id": self.org_id,
+                    "owner": {
+                        "id": self.org_owner_id,
+                    },
+                    "user": {
+                        "role": self.org_role,
+                    },
+                }
+                if self.org_id is not None
+                else None
+            ),
+            "organization_specified": self.org_specified,
+        }
+
+    def get_opa_settings_payload(self):
+        return {}
+
+    @abstractmethod
+    def get_resource(self):
+        return None
+
+    @staticmethod
+    def make_id_dict(id_: int | None, /) -> dict | None:
+        return None if id_ is None else {"id": id_}
 
     def __init__(self, **kwargs):
         self.obj = None
         for name, val in kwargs.items():
             setattr(self, name, val)
-
-        self.payload = {
-            "input": {
-                "scope": self.scope,
-                "auth": {
-                    "user": {
-                        "id": self.user_id,
-                        "privilege": self.group_name,
-                    },
-                    "organization": (
-                        {
-                            "id": self.org_id,
-                            "owner": {
-                                "id": self.org_owner_id,
-                            },
-                            "user": {
-                                "role": self.org_role,
-                            },
-                        }
-                        if self.org_id is not None
-                        else None
-                    ),
-                },
-            }
-        }
-
-        self.payload["input"]["resource"] = self.get_resource()
-
-    @abstractmethod
-    def get_resource(self):
-        return None
 
     def check_access(self) -> PermissionResult:
         with make_requests_session() as session:
@@ -204,39 +235,60 @@ class OpenPolicyAgentPermission(metaclass=ABCMeta):
 
         return PermissionResult(allow=allow, reasons=reasons)
 
+    @staticmethod
+    def add_org_filter_proof(queryset):
+        """
+        Records that an organization filter has been applied to the queryset,
+        so that the check in OrganizationFilterBackend can succeed.
+        Normally, this is done automatically when `.filter` is called and the Rego filter rule
+        uses add_organization_filter. However, a view can also call this directly
+        if it implements custom logic for organization filtering.
+        """
+        return queryset.alias(org_filter_proof=Value(True))
+
     def filter(self, queryset):
         url = self.url.replace("/allow", "/filter")
 
         with make_requests_session() as session:
             r = session.post(url, json=self.payload).json()["result"]
 
-        q_objects = []
-        ops_dict = {
+        binary_ops_dict = {
             "|": operator.or_,
             "&": operator.and_,
-            "~": operator.not_,
         }
-        for item in r:
-            if isinstance(item, str):
-                val1 = q_objects.pop()
-                if item == "~":
-                    q_objects.append(ops_dict[item](val1))
-                else:
-                    val2 = q_objects.pop()
-                    q_objects.append(ops_dict[item](val1, val2))
-            else:
-                q_objects.append(Q(**item))
 
-        if q_objects:
-            assert len(q_objects) == 1
-        else:
-            q_objects.append(Q())
+        add_org_filter_proof = False
+
+        def parse_filter(expr):
+            nonlocal add_org_filter_proof
+            match expr:
+                case ["~", arg]:
+                    return ~parse_filter(arg)
+                case [op, *args]:
+                    return reduce(binary_ops_dict[op], map(parse_filter, args))
+                case {} if not expr:
+                    # Empty Q() exhibits some bizarre behavior when used in expressions
+                    # (e.g. ~Q() works the same as Q()), so we use this as a more predictable
+                    # "always true" filter.
+                    return ~Q(pk__in=[])
+                case {}:
+                    return Q(**expr)
+                case "org_filter_proof":
+                    add_org_filter_proof = True
+                    return ~Q(pk__in=[])
+                case _:
+                    assert False, "unknown expression type"
 
         # By default, a QuerySet will not eliminate duplicate rows. If your
         # query spans multiple tables (e.g. members__user_id, owner_id), it's
         # possible to get duplicate results when a QuerySet is evaluated.
         # That's when you'd use distinct().
-        return queryset.filter(q_objects[0]).distinct()
+        queryset = queryset.filter(parse_filter(r)).distinct()
+
+        if add_org_filter_proof:
+            queryset = self.add_org_filter_proof(queryset)
+
+        return queryset
 
     @classmethod
     def get_per_field_update_scopes(cls, request, scopes_per_field):
@@ -260,32 +312,40 @@ class OpenPolicyAgentPermission(metaclass=ABCMeta):
         return scopes
 
 
-T = TypeVar("T", bound=Model)
-
-
-def is_public_obj(obj: T) -> bool:
-    return getattr(obj, "is_public", False)
-
-
 class PolicyEnforcer(BasePermission):
-    # pylint: disable=no-self-use
-    def check_permission(self, request, view, obj) -> bool:
-        # DRF can send OPTIONS request. Internally it will try to get
-        # information about serializers for PUT and POST requests (clone
-        # request and replace the http method). To avoid handling
-        # ('POST', 'metadata') and ('PUT', 'metadata') in every request,
-        # the condition below is enough.
-        if self.is_metadata_request(request, view) or obj and is_public_obj(obj):
-            return True
+    def _check_permission(
+        self, request: ExtendedRequest, view: ViewSet, obj
+    ) -> tuple[bool, list[OpenPolicyAgentPermission]]:
+        def _check_permissions():
+            # DRF can send OPTIONS request. Internally it will try to get
+            # information about serializers for PUT and POST requests (clone
+            # request and replace the http method). To avoid handling
+            # ('POST', 'metadata') and ('PUT', 'metadata') in every request,
+            # the condition below is enough.
+            if self.is_metadata_request(request, view):
+                return True
 
-        iam_context = get_iam_context(request, obj)
-        for perm_class in OpenPolicyAgentPermission.__subclasses__():
-            for perm in perm_class.create(request, view, obj, iam_context):
+            assert hasattr(
+                view, "iam_permission_class"
+            ), f"View {view} has no 'iam_permission_class' attribute"
+
+            perm_class = view.iam_permission_class
+            iam_context = get_iam_context(request, obj)
+
+            for perm in perm_class.create(request, view, obj, iam_context=iam_context):
+                checked_permissions.append(perm)
                 result = perm.check_access()
                 if not result.allow:
                     return False
 
-        return True
+            return True
+
+        checked_permissions = []
+        allow = _check_permissions()
+        return allow, checked_permissions
+
+    def check_permission(self, request, view, obj) -> bool:
+        return self._check_permission(request, view, obj)[0]
 
     def has_permission(self, request, view):
         if not view.detail:
@@ -303,26 +363,11 @@ class PolicyEnforcer(BasePermission):
         )
 
 
-class IsAuthenticatedOrReadPublicResource(BasePermission):
-    def has_object_permission(self, request, view, obj) -> bool:
-        return bool(
-            (request.user and request.user.is_authenticated)
-            or (request.method == "GET" and is_public_obj(obj))
-        )
-
-
-def load_app_permissions(config: AppConfig) -> None:
+def load_app_iam_rules(config: AppConfig) -> None:
     """
-    Ensures that permissions and OPA rules from the given app are loaded.
+    Ensures that OPA rules from the given app are loaded.
 
     This function should be called from the AppConfig.ready() method of every
-    app that defines a permissions module.
+    app that defines OPA rules.
     """
-    permissions_module = importlib.import_module(config.name + ".permissions")
-
-    assert any(
-        isinstance(attr, type) and issubclass(attr, OpenPolicyAgentPermission)
-        for attr in vars(permissions_module).values()
-    )
-
     add_opa_rules_path(Path(config.path, "rules"))

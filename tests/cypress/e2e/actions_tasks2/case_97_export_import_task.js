@@ -5,7 +5,11 @@
 
 /// <reference types="cypress" />
 
+import * as allure from 'allure-js-commons';
+import { AllureTag } from '../../support/const_allure';
+
 context('Export, import an annotation task.', { browser: '!firefox' }, () => {
+    allure.tags(AllureTag.HEAVY, AllureTag.SETTINGS);
     const caseId = '97';
     const labelName = 'car';
     const taskName = `Case ${caseId}`;
@@ -28,7 +32,7 @@ context('Export, import an annotation task.', { browser: '!firefox' }, () => {
     let ctmBeforeExport;
 
     const createRectangleShape2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Shape',
         labelName,
         firstX: 250,

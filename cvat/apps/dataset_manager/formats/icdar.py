@@ -13,7 +13,7 @@ from cvat.apps.dataset_manager.bindings import GetCVATDataExtractor, import_dm_a
 from cvat.apps.dataset_manager.util import make_zip_archive
 
 from .registry import dm_env, exporter, importer
-from .transformations import MaskToPolygonTransformation, RotatedBoxesToPolygons
+from .transformations import EllipsesToMasks, MaskToPolygonTransformation, RotatedBoxesToPolygons
 
 
 class AddLabelToAnns(ItemTransform):
@@ -84,7 +84,7 @@ def _export_recognition(dst_file, temp_dir, instance_data, save_images=False):
 
 
 @importer(name="ICDAR Recognition", ext="ZIP", version="1.0")
-def _import(src_file, temp_dir, instance_data, load_data_callback=None, **kwargs):
+def _import_recognition(src_file, temp_dir, instance_data, load_data_callback=None, **kwargs):
     zipfile.ZipFile(src_file).extractall(temp_dir)
 
     # We do not run detect_dataset before import because the ICDAR format
@@ -107,7 +107,7 @@ def _export_localization(dst_file, temp_dir, instance_data, save_images=False):
 
 
 @importer(name="ICDAR Localization", ext="ZIP", version="1.0")
-def _import(src_file, temp_dir, instance_data, load_data_callback=None, **kwargs):
+def _import_localization(src_file, temp_dir, instance_data, load_data_callback=None, **kwargs):
     zipfile.ZipFile(src_file).extractall(temp_dir)
 
     # We do not run detect_dataset before import because the ICDAR format
@@ -127,6 +127,7 @@ def _export_segmentation(dst_file, temp_dir, instance_data, save_images=False):
         dataset.transform(RotatedBoxesToPolygons)
         dataset.transform("polygons_to_masks")
         dataset.transform("boxes_to_masks")
+        dataset.transform(EllipsesToMasks)
         dataset.transform("merge_instance_segments")
         dataset.export(temp_dir, "icdar_text_segmentation", save_media=save_images)
 
@@ -134,7 +135,7 @@ def _export_segmentation(dst_file, temp_dir, instance_data, save_images=False):
 
 
 @importer(name="ICDAR Segmentation", ext="ZIP", version="1.0")
-def _import(src_file, temp_dir, instance_data, load_data_callback=None, **kwargs):
+def _import_segmentation(src_file, temp_dir, instance_data, load_data_callback=None, **kwargs):
     zipfile.ZipFile(src_file).extractall(temp_dir)
 
     # We do not run detect_dataset before import because the ICDAR format

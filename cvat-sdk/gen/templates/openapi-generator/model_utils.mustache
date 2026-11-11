@@ -10,8 +10,6 @@ import re
 import tempfile
 import uuid
 
-from dateutil.parser import parse
-
 from {{packageName}}.exceptions import (
     ApiKeyError,
     ApiAttributeError,
@@ -948,7 +946,7 @@ def deserialize_primitive(data, klass, path_to_item):
                 if len(data) < 8:
                     raise ValueError("This is not a datetime")
                 # The string should be in iso8601 datetime format.
-                parsed_datetime = parse(data)
+                parsed_datetime = datetime.fromisoformat(data)
                 date_only = (
                     parsed_datetime.hour == 0 and
                     parsed_datetime.minute == 0 and
@@ -962,7 +960,7 @@ def deserialize_primitive(data, klass, path_to_item):
             elif klass == date:
                 if len(data) < 8:
                     raise ValueError("This is not a date")
-                return parse(data).date()
+                return datetime.fromisoformat(data).date()
         else:
             converted_value = klass(data)
             if isinstance(data, str) and klass == float:
@@ -1040,7 +1038,7 @@ def deserialize_model(model_data, model_class, path_to_item, check_type,
         model_data (int/str/float/bool/none_type/list/dict): data to instantiate the model
         model_class (OpenApiModel): the model class
         path_to_item (list): path to the model in the received data
-        check_type (bool): whether to check the data tupe for the values in
+        check_type (bool): whether to check the data type for the values in
             the model
         configuration (Configuration): the instance to use to convert files
         spec_property_naming (bool): True if the variable names in the input
@@ -1437,7 +1435,7 @@ def type_error_message(var_value=None, var_name=None, valid_classes=None,
     """
     Keyword Args:
         var_value (any): the variable which has the type_error
-        var_name (str): the name of the variable which has the typ error
+        var_name (str): the name of the variable which has the type error
         valid_classes (tuple): the accepted classes for current_item's
                                   value
         key_type (bool): False if our value is a value in a dict

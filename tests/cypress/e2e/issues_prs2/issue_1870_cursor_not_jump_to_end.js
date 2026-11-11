@@ -14,7 +14,7 @@ context(
     () => {
         const issueId = '1870';
         const createRectangleShape2Points = {
-            points: 'By 2 Points',
+            points: '2 Points',
             type: 'Shape',
             labelName,
             firstX: 250,
@@ -24,6 +24,7 @@ context(
         };
 
         before(() => {
+            cy.prepareUserSession();
             cy.openTaskJob(taskName);
         });
 

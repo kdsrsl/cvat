@@ -6,9 +6,28 @@ import data.utils
 import data.organizations
 
 # input: {
-#     "scope": <"create"|"view"|"list"|"update:state"|"update:stage"|"update:assignee""delete"|
-#         "view:annotations"|"update:annotations"|"delete:annotations"|"view:data"|
-#         "export:annotations" | "export:dataset" |> or null,
+#     "scope": <
+#              "create"|
+#              "delete"|
+#              "delete:annotations"|
+#              "download:exported_file"|
+#              "export:annotations"|
+#              "export:dataset"|
+#              "import:annotations"|
+#              "list"|
+#              "update"|
+#              "update:annotations"|
+#              "update:assignee"|
+#              "update:metadata"|
+#              "update:stage"|
+#              "update:state"|
+#              "update:validation_layout"|
+#              "view"|
+#              "view:annotations"|
+#              "view:data"|
+#              "view:metadata"|
+#              "view:validation_layout"
+#          > or null,
 #     "auth": {
 #         "user": {
 #             "id": <num>,
@@ -37,6 +56,7 @@ import data.organizations
 #             "assignee": { "id": <num> }
 #         } or null,
 #         "rq_job": { "owner": { "id": <num> } } or null,
+#         "destination": <"local" | "cloud_storage"> or undefined,
 #     }
 # }
 
@@ -88,10 +108,30 @@ is_job_staff if {
     is_job_assignee
 }
 
+is_task_or_project_owner if {
+    is_task_owner
+}
+
+is_task_or_project_owner if {
+    is_project_owner
+}
+
 default allow := false
 
 allow if {
     utils.is_admin
+}
+
+allow if {
+    input.scope in {
+        utils.CREATE, utils.DELETE, utils.DELETE_ANNOTATIONS, utils.EXPORT_ANNOTATIONS,
+        utils.EXPORT_DATASET, utils.IMPORT_ANNOTATIONS, utils.UPDATE_ANNOTATIONS,
+        utils.UPDATE_ASSIGNEE, utils.UPDATE_METADATA, utils.UPDATE_STAGE, utils.UPDATE_STATE,
+        utils.UPDATE_VALIDATION_LAYOUT, utils.VIEW, utils.VIEW_ANNOTATIONS, utils.VIEW_DATA,
+        utils.VIEW_METADATA, utils.VIEW_VALIDATION_LAYOUT
+    }
+    organizations.is_same_org_as_resource_with_perm(organizations.MAINTAINER)
+    utils.has_perm(utils.USER)
 }
 
 allow if {
@@ -105,88 +145,61 @@ allow if {
 }
 
 
-filter := [] if { # Django Q object to filter list of entries
+base_filter := {} if { # Django Q object to filter list of entries
     utils.is_admin
-    utils.is_sandbox
-} else := qobject if {
-    utils.is_admin
-    utils.is_organization
-    qobject := [
-        {"segment__task__organization": input.auth.organization.id},
-        {"segment__task__project__organization": input.auth.organization.id}, "|" ]
 } else := qobject if {
     utils.is_sandbox
     user := input.auth.user
-    qobject := [
+    qobject := ["|",
         {"assignee_id": user.id},
-        {"segment__task__owner_id": user.id}, "|",
-        {"segment__task__assignee_id": user.id}, "|",
-        {"segment__task__project__owner_id": user.id}, "|",
-        {"segment__task__project__assignee_id": user.id}, "|"]
-} else := qobject if {
+        {"segment__task__owner_id": user.id},
+        {"segment__task__assignee_id": user.id},
+        {"segment__task__project__owner_id": user.id},
+        {"segment__task__project__assignee_id": user.id},
+    ]
+} else := {} if {
     utils.is_organization
     utils.has_perm(utils.USER)
     organizations.has_perm(organizations.MAINTAINER)
-    qobject := [
-        {"segment__task__organization": input.auth.organization.id},
-        {"segment__task__project__organization": input.auth.organization.id}, "|"]
 } else := qobject if {
     organizations.has_perm(organizations.WORKER)
     user := input.auth.user
-    qobject := [
+    qobject := ["|",
         {"assignee_id": user.id},
-        {"segment__task__owner_id": user.id}, "|",
-        {"segment__task__assignee_id": user.id}, "|",
-        {"segment__task__project__owner_id": user.id}, "|",
-        {"segment__task__project__assignee_id": user.id}, "|",
-        {"segment__task__organization": input.auth.organization.id},
-        {"segment__task__project__organization": input.auth.organization.id}, "|", "&"]
+        {"segment__task__owner_id": user.id},
+        {"segment__task__assignee_id": user.id},
+        {"segment__task__project__owner_id": user.id},
+        {"segment__task__project__assignee_id": user.id},
+    ]
 }
+
+filter := utils.add_organization_filter(base_filter, ["segment__task__organization"])
 
 allow if {
     input.scope in {utils.CREATE, utils.DELETE}
     utils.has_perm(utils.USER)
-    utils.is_sandbox
-    is_task_staff
-}
-
-allow if {
-    input.scope in {utils.CREATE, utils.DELETE}
-    input.auth.organization.id == input.resource.organization.id
-    organizations.has_perm(organizations.SUPERVISOR)
-    utils.has_perm(utils.USER)
+    organizations.is_same_context_as_resource_with_perm(organizations.SUPERVISOR)
     is_task_staff
 }
 
 allow if {
     input.scope in {
         utils.VIEW,
-        utils.EXPORT_DATASET, utils.EXPORT_ANNOTATIONS,
         utils.VIEW_ANNOTATIONS, utils.VIEW_DATA, utils.VIEW_METADATA
     }
-    utils.is_sandbox
+    organizations.is_same_context_as_resource
     is_job_staff
 }
 
 allow if {
-    input.scope in {
-        utils.CREATE, utils.DELETE, utils.VIEW,
-        utils.EXPORT_DATASET, utils.EXPORT_ANNOTATIONS,
-        utils.VIEW_ANNOTATIONS, utils.VIEW_DATA, utils.VIEW_METADATA
-    }
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.USER)
-    organizations.has_perm(organizations.MAINTAINER)
+    input.scope in {utils.EXPORT_DATASET, utils.EXPORT_ANNOTATIONS}
+    organizations.is_same_context_as_resource
+    is_task_or_project_owner
 }
 
 allow if {
-    input.scope in {
-        utils.VIEW,
-        utils.EXPORT_DATASET, utils.EXPORT_ANNOTATIONS,
-        utils.VIEW_ANNOTATIONS, utils.VIEW_DATA, utils.VIEW_METADATA
-    }
-    input.auth.organization.id == input.resource.organization.id
-    organizations.has_perm(organizations.WORKER)
+    input.scope in {utils.EXPORT_DATASET, utils.EXPORT_ANNOTATIONS}
+    organizations.is_same_context_as_resource_with_perm(organizations.SUPERVISOR)
     is_job_staff
 }
 
@@ -195,84 +208,22 @@ allow if {
         utils.UPDATE_STATE, utils.UPDATE_ANNOTATIONS, utils.DELETE_ANNOTATIONS,
         utils.IMPORT_ANNOTATIONS, utils.UPDATE_METADATA
     }
-    utils.is_sandbox
+    organizations.is_same_context_as_resource
     utils.has_perm(utils.WORKER)
     is_job_staff
-}
-
-allow if {
-    input.scope in {
-        utils.UPDATE_STATE, utils.UPDATE_ANNOTATIONS, utils.DELETE_ANNOTATIONS,
-        utils.IMPORT_ANNOTATIONS, utils.UPDATE_METADATA
-    }
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.USER)
-    organizations.has_perm(organizations.MAINTAINER)
-}
-
-allow if {
-    input.scope in {
-        utils.UPDATE_STATE, utils.UPDATE_ANNOTATIONS, utils.DELETE_ANNOTATIONS,
-        utils.IMPORT_ANNOTATIONS, utils.UPDATE_METADATA
-    }
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.WORKER)
-    organizations.has_perm(organizations.WORKER)
-    is_job_staff
-}
-
-allow if {
-    input.scope in {
-        utils.VIEW, utils.VIEW_ANNOTATIONS, utils.VIEW_DATA, utils.VIEW_METADATA,
-        utils.UPDATE_STATE, utils.UPDATE_ANNOTATIONS, utils.DELETE_ANNOTATIONS,
-        utils.IMPORT_ANNOTATIONS, utils.UPDATE_METADATA
-    }
-    input.auth.organization.id == input.resource.organization.id
-    input.auth.user.privilege == utils.WORKER
-    input.auth.organization.user.role == null
-    is_job_assignee
 }
 
 allow if {
     input.scope in {utils.UPDATE_STAGE, utils.UPDATE_ASSIGNEE}
-    utils.is_sandbox
+    organizations.is_same_context_as_resource
     utils.has_perm(utils.WORKER)
-    is_task_staff
-}
-
-allow if {
-    input.scope in {utils.UPDATE_STAGE, utils.UPDATE_ASSIGNEE}
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.USER)
-    organizations.has_perm(organizations.MAINTAINER)
-}
-
-allow if {
-    input.scope in {utils.UPDATE_STAGE, utils.UPDATE_ASSIGNEE}
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.WORKER)
-    organizations.has_perm(organizations.WORKER)
     is_task_staff
 }
 
 allow if {
     input.scope in {utils.VIEW_VALIDATION_LAYOUT, utils.UPDATE_VALIDATION_LAYOUT}
-    utils.is_sandbox
+    organizations.is_same_context_as_resource
     is_task_staff
-}
-
-allow if {
-    input.scope in {utils.VIEW_VALIDATION_LAYOUT, utils.UPDATE_VALIDATION_LAYOUT}
-    input.auth.organization.id == input.resource.organization.id
-    organizations.has_perm(organizations.WORKER)
-    is_task_staff
-}
-
-allow if {
-    input.scope in {utils.VIEW_VALIDATION_LAYOUT, utils.UPDATE_VALIDATION_LAYOUT}
-    input.auth.organization.id == input.resource.organization.id
-    organizations.has_perm(organizations.MAINTAINER)
-    utils.has_perm(utils.USER)
 }
 
 allow if {

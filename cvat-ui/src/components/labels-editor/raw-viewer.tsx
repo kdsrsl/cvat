@@ -26,25 +26,27 @@ function transformSkeletonSVG(value: string): string {
     // the function guarantees successful result only if all labels configuration is passed
     // or if the whole configuration for one label is passed (with sublabels, etc)
 
-    let data = value;
+    let data = value.trim();
+    data = data.startsWith('[') ? data : `[${data}]`;
+
     const idNameMapping: Record<string, string> = {};
     try {
-        const parsed = JSON.parse(data.trim().startsWith('[') ? data : `[${data}]`);
+        const parsed = JSON.parse(replaceTrailingCommas(data));
         for (const label of parsed) {
             for (const sublabel of (label.sublabels || [])) {
                 idNameMapping[sublabel.id] = sublabel.name;
             }
         }
-    } catch (error: any) {
+    } catch (_error: any) {
         // unsuccessful parsing, return value as is
         return value;
     }
 
-    const matches = data.matchAll(/data-label-id=&quot;([\d]+)&quot;/g);
+    const matches = data.matchAll(/data-label-id=\\"([\d]+)\\"/g);
     for (const match of matches) {
         if (idNameMapping[match[1]]) {
             data = data.replace(
-                match[0], `data-label-name=&quot;${idNameMapping[match[1]]}&quot;`,
+                match[0], `data-label-name=\\"${idNameMapping[match[1]]}\\"`,
             );
         }
     }
@@ -58,10 +60,6 @@ function validateLabels(_: RuleObject, value: string): Promise<void> {
         if (!Array.isArray(parsed)) {
             return Promise.reject(new Error('Field is expected to be a JSON array'));
         }
-        const labelNames = parsed.map((label: SerializedLabel) => label.name);
-        if (new Set(labelNames).size !== labelNames.length) {
-            return Promise.reject(new Error('Label names must be unique for the task'));
-        }
 
         for (const label of parsed) {
             try {
@@ -69,6 +67,11 @@ function validateLabels(_: RuleObject, value: string): Promise<void> {
             } catch (error) {
                 return Promise.reject(error);
             }
+        }
+
+        const labelNames = parsed.map((label: SerializedLabel) => label.name.trim());
+        if (new Set(labelNames).size !== labelNames.length) {
+            return Promise.reject(new Error('Label name must be unique'));
         }
     } catch (error) {
         return Promise.reject(error);
@@ -80,22 +83,55 @@ function validateLabels(_: RuleObject, value: string): Promise<void> {
 interface Props {
     labels: LabelOptColor[];
     onSubmit: (labels: LabelOptColor[]) => void;
+    submitting: boolean;
+}
+
+interface AttributeWithLabelPath {
+    attribute: SerializedAttribute;
+    labelPath: string;
+}
+
+function convertLabel(label: LabelOptColor): LabelOptColor {
+    return {
+        ...label,
+        id: (label.id as number) < 0 ? undefined : label.id,
+        attributes: label.attributes.map(
+            (attribute: any): SerializedAttribute => ({
+                ...attribute,
+                id: attribute.id < 0 ? undefined : attribute.id,
+            }),
+        ),
+        sublabels: label.sublabels?.map(convertLabel),
+    };
 }
 
 function convertLabels(labels: LabelOptColor[]): LabelOptColor[] {
     return labels.map(
-        (label: LabelOptColor): LabelOptColor => ({
-            ...label,
-            id: (label.id as number) < 0 ? undefined : label.id,
-            svg: label.svg ? label.svg.replaceAll('"', '&quot;') : undefined,
-            attributes: label.attributes.map(
-                (attribute: any): SerializedAttribute => ({
-                    ...attribute,
-                    id: attribute.id < 0 ? undefined : attribute.id,
-                }),
-            ),
-        }),
+        (label: LabelOptColor): LabelOptColor => convertLabel(label),
     );
+}
+
+function collectAttributeIDs(labels: SerializedLabel[]): number[] {
+    return labels.flatMap((label: SerializedLabel): number[] => [
+        ...label.attributes
+            .map((attr: SerializedAttribute): number | undefined => attr.id)
+            .filter((id: number | undefined): id is number => typeof id !== 'undefined' && id >= 0),
+        ...collectAttributeIDs(label.sublabels || []),
+    ]);
+}
+
+function collectAttributes(labels: SerializedLabel[], parentPath = ''): AttributeWithLabelPath[] {
+    return labels.flatMap((label: SerializedLabel): AttributeWithLabelPath[] => {
+        const labelPath = parentPath ? `${parentPath} / ${label.name}` : label.name;
+
+        return [
+            ...label.attributes.map((attribute: SerializedAttribute): AttributeWithLabelPath => ({
+                attribute,
+                labelPath,
+            })),
+            ...collectAttributes(label.sublabels || [], labelPath),
+        ];
+    });
 }
 
 export default class RawViewer extends React.PureComponent<Props> {
@@ -121,35 +157,28 @@ export default class RawViewer extends React.PureComponent<Props> {
             replaceTrailingCommas(values.labels),
         ) as SerializedLabel[];
 
-        const labelIDs: number[] = [];
-        const attrIDs: number[] = [];
+        const labelIds: number[] = [];
         for (const label of parsed) {
-            if (label.svg) {
-                label.svg = label.svg.replaceAll('&quot;', '"');
-            }
             label.id = label.id || idGenerator();
             if (label.id >= 0) {
-                labelIDs.push(label.id);
+                labelIds.push(label.id);
             }
-            for (const attr of label.attributes) {
+            for (const { attribute: attr } of collectAttributes([label])) {
                 attr.id = attr.id || idGenerator();
-                if (attr.id >= 0) {
-                    attrIDs.push(attr.id);
-                }
             }
         }
 
         const deletedLabels = labels
             .filter((_label: LabelOptColor) => {
-                const labelID = _label.id as number;
-                return labelID >= 0 && !labelIDs.includes(labelID);
+                const labelId = _label.id as number;
+                return labelId >= 0 && !labelIds.includes(labelId);
             });
 
-        const deletedAttributes = labels
-            .reduce((acc: SerializedAttribute[], _label) => [...acc, ..._label.attributes], [])
-            .filter((_attr: SerializedAttribute) => {
-                const attrID = _attr.id as number;
-                return attrID >= 0 && !attrIDs.includes(attrID);
+        const parsedAttrIds = collectAttributeIDs(parsed);
+        const deletedAttributes = collectAttributes(labels)
+            .filter(({ attribute }: AttributeWithLabelPath) => {
+                const attrId = attribute.id as number;
+                return attrId >= 0 && !parsedAttrIds.includes(attrId);
             });
 
         if (deletedLabels.length || deletedAttributes.length) {
@@ -174,8 +203,8 @@ export default class RawViewer extends React.PureComponent<Props> {
                             <Paragraph>
                                 Following attributes are going to be removed:
                                 <div className='cvat-modal-confirm-content-remove-existing-attributes'>
-                                    {deletedAttributes.map((_attr: SerializedAttribute) => (
-                                        <Tag key={_attr.id as number}>{_attr.name}</Tag>
+                                    {deletedAttributes.map(({ attribute, labelPath }: AttributeWithLabelPath) => (
+                                        <Tag key={attribute.id as number}>{`${labelPath}: ${attribute.name}`}</Tag>
                                     ))}
                                 </div>
                             </Paragraph>
@@ -198,7 +227,7 @@ export default class RawViewer extends React.PureComponent<Props> {
     };
 
     public render(): JSX.Element {
-        const { labels } = this.props;
+        const { labels, submitting } = this.props;
         const convertedLabels = convertLabels(labels);
         const textLabels = JSON.stringify(convertedLabels, null, 2);
         return (
@@ -219,6 +248,7 @@ export default class RawViewer extends React.PureComponent<Props> {
                                     const updatedValue = value
                                         .substr(0, selectionStart) + replaced + value.substr(selectionEnd);
                                     this.formRef.current.setFieldsValue({ labels: updatedValue });
+                                    this.formRef.current.validateFields(['labels']).catch(() => {});
                                     setTimeout(() => {
                                         element.setSelectionRange(selectionEnd, selectionEnd);
                                     });
@@ -230,37 +260,49 @@ export default class RawViewer extends React.PureComponent<Props> {
                         className='cvat-raw-labels-viewer'
                     />
                 </Form.Item>
-                <Row justify='start' align='middle'>
-                    <Col>
-                        <CVATTooltip title='Save labels'>
-                            <Button
-                                className='cvat-submit-raw-labels-conf-button'
-                                style={{ width: '150px' }}
-                                type='primary'
-                                htmlType='submit'
-                            >
-                                Done
-                            </Button>
-                        </CVATTooltip>
-                    </Col>
-                    <Col offset={1}>
-                        <CVATTooltip title='Reset all changes'>
-                            <Button
-                                className='cvat-reset-raw-labels-conf-button'
-                                type='primary'
-                                danger
-                                style={{ width: '150px' }}
-                                onClick={(): void => {
-                                    if (this.formRef.current) {
-                                        this.formRef.current.resetFields();
-                                    }
-                                }}
-                            >
-                                Reset
-                            </Button>
-                        </CVATTooltip>
-                    </Col>
-                </Row>
+                <Form.Item shouldUpdate noStyle>
+                    {({ getFieldError, getFieldValue }) => {
+                        const hasChanges = getFieldValue('labels') !== textLabels;
+                        const hasErrors = getFieldError('labels').length > 0;
+
+                        return (
+                            <Row justify='start' align='middle'>
+                                <Col>
+                                    <CVATTooltip title='Save labels'>
+                                        <Button
+                                            className='cvat-submit-raw-labels-conf-button'
+                                            style={{ width: '150px' }}
+                                            type='primary'
+                                            htmlType='submit'
+                                            loading={submitting}
+                                            disabled={!hasChanges || hasErrors || submitting}
+                                        >
+                                            Save
+                                        </Button>
+                                    </CVATTooltip>
+                                </Col>
+                                <Col offset={1}>
+                                    <CVATTooltip title='Reset all changes'>
+                                        <Button
+                                            className='cvat-reset-raw-labels-conf-button'
+                                            type='primary'
+                                            danger
+                                            style={{ width: '150px' }}
+                                            disabled={!hasChanges}
+                                            onClick={(): void => {
+                                                if (this.formRef.current) {
+                                                    this.formRef.current.resetFields();
+                                                }
+                                            }}
+                                        >
+                                            Cancel
+                                        </Button>
+                                    </CVATTooltip>
+                                </Col>
+                            </Row>
+                        );
+                    }}
+                </Form.Item>
             </Form>
         );
     }

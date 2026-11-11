@@ -7,6 +7,7 @@ import { omit } from 'lodash';
 import config from './config';
 
 import PluginRegistry from './plugins';
+import { observe } from './capabilities';
 import serverProxy from './server-proxy';
 import lambdaManager from './lambda-manager';
 import requestsManager from './requests-manager';
@@ -14,7 +15,6 @@ import {
     isBoolean,
     isInteger,
     isString,
-    isPageSize,
     checkFilter,
     checkExclusiveFields,
     checkObjectType,
@@ -23,7 +23,9 @@ import {
 } from './common';
 
 import User from './user';
-import { AnnotationFormats } from './annotation-formats';
+import UserGrowthData from './growth';
+import AnnotationFormats from './annotation-formats';
+import ApiToken from './api-token';
 import { Task, Job } from './session';
 import Project from './project';
 import CloudStorage from './cloud-storage';
@@ -31,32 +33,38 @@ import Organization, { Invitation } from './organization';
 import Webhook from './webhook';
 import { ArgumentError } from './exceptions';
 import {
-    AnalyticsEventsFilter, QualityConflictsFilter, QualityReportsFilter,
-    QualitySettingsFilter, SerializedAsset, ConsensusSettingsFilter,
+    SerializedAsset, SerializedOrganization,
 } from './server-response-types';
-import QualityReport from './quality-report';
+import {
+    AnalyticsEventsFilter, QualityConflictsFilter, QualityRequirementsFilter, ConsensusSettingsFilter,
+} from './server-request-types';
+import {
+    ConflictSeverity, getQualitySettingsSchemaDescriptions, QualityConflict,
+    QualityReport, QualityRequirement, QualitySettings,
+} from './quality';
 import AboutData from './about';
-import QualityConflict, { ConflictSeverity } from './quality-conflict';
-import QualitySettings from './quality-settings';
 import { getFramesMeta } from './frames';
 import ConsensusSettings from './consensus-settings';
 import {
-    callAction, listActions, registerAction, runAction,
+    callAction, listActions, registerAction, unregisterAction, runAction,
 } from './annotations-actions/annotations-actions';
 import { convertDescriptions, getServerAPISchema } from './server-schema';
 import { JobType } from './enums';
 import { PaginatedResource } from './core-types';
 import CVATCore from '.';
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
 function implementationMixin(func: Function, implementation: Function): void {
     Object.assign(func, { implementation });
 }
 
 export default function implementAPI(cvat: CVATCore): CVATCore {
+    implementationMixin(cvat.capabilities.observe, observe);
     implementationMixin(cvat.plugins.list, PluginRegistry.list);
     implementationMixin(cvat.plugins.register, PluginRegistry.register.bind(cvat));
     implementationMixin(cvat.actions.list, listActions);
     implementationMixin(cvat.actions.register, registerAction);
+    implementationMixin(cvat.actions.unregister, unregisterAction);
     implementationMixin(cvat.actions.run, runAction);
     implementationMixin(cvat.actions.call, callAction);
 
@@ -75,8 +83,10 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
         const result = await serverProxy.server.about();
         return new AboutData(result);
     });
-    implementationMixin(cvat.server.share, async (directory: string, searchPrefix?: string) => {
-        const result = await serverProxy.server.share(directory, searchPrefix);
+    implementationMixin(cvat.server.share, async (
+        ...args: Parameters<typeof serverProxy.server.share>
+    ) => {
+        const result = await serverProxy.server.share(...args);
         return result.map((item) => ({ ...omit(item, 'mime_type'), mimeType: item.mime_type }));
     });
     implementationMixin(cvat.server.formats, async () => {
@@ -88,58 +98,48 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
         return result;
     });
     implementationMixin(cvat.server.register, async (
-        username,
-        firstName,
-        lastName,
-        email,
-        password,
-        userConfirmations,
+        ...args: Parameters<typeof serverProxy.server.register>
     ) => {
-        const user = await serverProxy.server.register(
-            username,
-            firstName,
-            lastName,
-            email,
-            password,
-            userConfirmations,
-        );
-
-        return new User(user);
+        const result = await serverProxy.server.register(...args);
+        return result;
     });
-    implementationMixin(cvat.server.login, async (username, password) => {
-        await serverProxy.server.login(username, password);
+    implementationMixin(cvat.server.login, async (
+        ...args: Parameters<typeof serverProxy.server.login>
+    ) => {
+        await serverProxy.server.login(...args);
     });
     implementationMixin(cvat.server.logout, async () => {
         await serverProxy.server.logout();
     });
-    implementationMixin(cvat.server.changePassword, async (oldPassword, newPassword1, newPassword2) => {
-        await serverProxy.server.changePassword(oldPassword, newPassword1, newPassword2);
+    implementationMixin(cvat.server.changePassword, async (
+        ...args: Parameters<typeof serverProxy.server.changePassword>
+    ) => {
+        await serverProxy.server.changePassword(...args);
     });
-    implementationMixin(cvat.server.requestPasswordReset, async (email) => {
-        await serverProxy.server.requestPasswordReset(email);
+    implementationMixin(cvat.server.requestPasswordReset, async (
+        ...args: Parameters<typeof serverProxy.server.requestPasswordReset>
+    ) => {
+        await serverProxy.server.requestPasswordReset(...args);
     });
-    implementationMixin(cvat.server.resetPassword, async (newPassword1, newPassword2, uid, token) => {
-        await serverProxy.server.resetPassword(newPassword1, newPassword2, uid, token);
+    implementationMixin(cvat.server.resetPassword, async (
+        ...args: Parameters<typeof serverProxy.server.resetPassword>
+    ) => {
+        await serverProxy.server.resetPassword(...args);
     });
     implementationMixin(cvat.server.authenticated, async () => {
         const result = await serverProxy.server.authenticated();
         return result;
     });
     implementationMixin(cvat.server.healthCheck, async (
-        maxRetries: number,
-        checkPeriod: number,
-        requestTimeout: number,
-        progressCallback?: (message: string) => void,
+        ...args: Parameters<typeof serverProxy.server.healthCheck>
     ) => {
-        const result = await serverProxy.server.healthCheck(maxRetries, checkPeriod, requestTimeout, progressCallback);
+        const result = await serverProxy.server.healthCheck(...args);
         return result;
     });
-    implementationMixin(cvat.server.request, async (url, data, requestConfig) => {
-        const result = await serverProxy.server.request(url, data, requestConfig);
-        return result;
-    });
-    implementationMixin(cvat.server.setAuthData, async (response) => {
-        const result = await serverProxy.server.setAuthData(response);
+    implementationMixin(cvat.server.request, async (
+        ...args: Parameters<typeof serverProxy.server.request>
+    ) => {
+        const result = await serverProxy.server.request(...args);
         return result;
     });
     implementationMixin(cvat.server.installedApps, async () => {
@@ -152,7 +152,10 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
         return result;
     });
 
-    implementationMixin(cvat.assets.create, async (file: File, guideId: number): Promise<SerializedAsset> => {
+    implementationMixin(cvat.assets.create, async (
+        ...args: Parameters<typeof serverProxy.assets.create>
+    ): Promise<SerializedAsset> => {
+        const [file, guideId] = args;
         if (!(file instanceof File)) {
             throw new ArgumentError('Assets expect a file');
         }
@@ -167,7 +170,9 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
             is_active: isBoolean,
             self: isBoolean,
             search: isString,
+            filter: isString,
             limit: isInteger,
+            pageSize: isInteger,
         });
 
         let users = null;
@@ -181,27 +186,58 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
                     searchParams[key] = filter[key];
                 }
             }
-            users = await serverProxy.users.get(searchParams);
+            users = await serverProxy.users.get(fieldsToSnakeCase(searchParams));
         }
 
         users = users.map((user) => new User(user));
         return users;
     });
 
+    implementationMixin(cvat.growth.get, async (userId: number): Promise<UserGrowthData[]> => {
+        const result = await serverProxy.growth.get(userId);
+        return result.map((growthData) => new UserGrowthData(growthData));
+    });
+
+    implementationMixin(cvat.apiTokens.get, async (filter) => {
+        checkFilter(filter, {
+            id: isInteger,
+            page: isInteger,
+            page_size: isInteger,
+            filter: isString,
+            sort: isString,
+            search: isString,
+            name: isString,
+            owner: isInteger,
+            read_only: isBoolean,
+            created_date: isString,
+            updated_date: isString,
+            expiry_date: isString,
+            last_used_date: isString,
+        });
+
+        const result = await serverProxy.apiTokens.get(filter);
+        const tokens = result.map((tokenData) => new ApiToken(tokenData));
+        Object.assign(tokens, { count: result.count });
+        return tokens as PaginatedResource<ApiToken>;
+    });
+
     implementationMixin(cvat.jobs.get, async (
         query: Parameters<CVATCore['jobs']['get']>[0],
+        aggregate: Parameters<CVATCore['jobs']['get']>[1],
     ): ReturnType<CVATCore['jobs']['get']> => {
         checkFilter(query, {
             page: isInteger,
+            pageSize: isInteger,
             filter: isString,
             sort: isString,
             search: isString,
             jobID: isInteger,
             taskID: isInteger,
+            projectID: isInteger,
             type: isString,
         });
 
-        checkExclusiveFields(query, ['jobID', 'filter', 'search'], ['page', 'sort']);
+        checkExclusiveFields(query, ['jobID', 'filter', 'search'], ['page', 'pageSize', 'sort']);
         if ('jobID' in query) {
             const results = await serverProxy.jobs.get({ id: query.jobID });
             const [job] = results;
@@ -214,18 +250,9 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
             return Object.assign([], { count: 0 });
         }
 
-        const searchParams: Record<string, string> = {};
+        const searchParams = fieldsToSnakeCase({ ...query });
 
-        for (const key of Object.keys(query)) {
-            if (['page', 'sort', 'search', 'filter', 'type'].includes(key)) {
-                searchParams[key] = query[key];
-            }
-        }
-        if ('taskID' in query) {
-            searchParams.task_id = `${query.taskID}`;
-        }
-
-        const jobsData = await serverProxy.jobs.get(searchParams);
+        const jobsData = await serverProxy.jobs.get(searchParams, aggregate);
         if (query.type === JobType.GROUND_TRUTH && jobsData.count === 1) {
             const labels = await serverProxy.labels.get({ job_id: jobsData[0].id });
             return Object.assign([
@@ -242,9 +269,11 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
 
     implementationMixin(cvat.tasks.get, async (
         filter: Parameters<CVATCore['tasks']['get']>[0],
+        aggregate: Parameters<CVATCore['tasks']['get']>[1],
     ): ReturnType<CVATCore['tasks']['get']> => {
         checkFilter(filter, {
             page: isInteger,
+            pageSize: isInteger,
             projectId: isInteger,
             id: isInteger,
             sort: isString,
@@ -253,24 +282,10 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
             ordering: isString,
         });
 
-        checkExclusiveFields(filter, ['id'], ['page']);
-        const searchParams = {};
-        for (const key of Object.keys(filter)) {
-            if (['page', 'id', 'sort', 'search', 'filter', 'ordering'].includes(key)) {
-                searchParams[key] = filter[key];
-            }
-        }
+        checkExclusiveFields(filter, ['id'], ['page', 'pageSize']);
+        const searchParams = filterFieldsToSnakeCase(filter, ['projectId']);
 
-        if ('projectId' in filter) {
-            if (searchParams.filter) {
-                const parsed = JSON.parse(searchParams.filter);
-                searchParams.filter = JSON.stringify({ and: [parsed, { '==': [{ var: 'project_id' }, filter.projectId] }] });
-            } else {
-                searchParams.filter = JSON.stringify({ and: [{ '==': [{ var: 'project_id' }, filter.projectId] }] });
-            }
-        }
-
-        const tasksData = await serverProxy.tasks.get(searchParams);
+        const tasksData = await serverProxy.tasks.get(searchParams, aggregate);
         const tasks = await Promise.all(tasksData.map(async (taskItem) => {
             if ('id' in filter) {
                 // When request task by ID we also need to add labels and jobs to work with them
@@ -300,18 +315,14 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
         checkFilter(filter, {
             id: isInteger,
             page: isInteger,
+            pageSize: isInteger,
             search: isString,
             sort: isString,
             filter: isString,
         });
 
-        checkExclusiveFields(filter, ['id'], ['page']);
-        const searchParams = {};
-        for (const key of Object.keys(filter)) {
-            if (['page', 'id', 'sort', 'search', 'filter'].includes(key)) {
-                searchParams[key] = filter[key];
-            }
-        }
+        checkExclusiveFields(filter, ['id'], ['page', 'pageSize']);
+        const searchParams = fieldsToSnakeCase(filter);
 
         const projectsData = await serverProxy.projects.get(searchParams);
         const projects = await Promise.all(projectsData.map(async (projectItem) => {
@@ -333,19 +344,16 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
     implementationMixin(cvat.cloudStorages.get, async (filter) => {
         checkFilter(filter, {
             page: isInteger,
+            pageSize: isInteger,
             filter: isString,
             sort: isString,
             id: isInteger,
             search: isString,
         });
 
-        checkExclusiveFields(filter, ['id', 'search'], ['page']);
-        const searchParams = {};
-        for (const key of Object.keys(filter)) {
-            if (['page', 'filter', 'sort', 'id', 'search'].includes(key)) {
-                searchParams[key] = filter[key];
-            }
-        }
+        checkExclusiveFields(filter, ['id', 'search'], ['page', 'pageSize']);
+        const searchParams = fieldsToSnakeCase(filter);
+
         const cloudStoragesData = await serverProxy.cloudStorages.get(searchParams);
         const cloudStorages = cloudStoragesData.map((cloudStorage) => new CloudStorage(cloudStorage));
         Object.assign(cloudStorages, { count: cloudStoragesData.count });
@@ -356,20 +364,28 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
         checkFilter(filter, {
             search: isString,
             filter: isString,
+            page: isInteger,
+            page_size: isInteger,
+            sort: isString,
         });
 
-        const organizationsData = await serverProxy.organizations.get(filter);
-        const organizations = organizationsData.map((organizationData) => new Organization(organizationData));
-        return organizations;
+        const organizationsPage = await serverProxy.organizations.get(filter);
+        const results = organizationsPage.results.map((org_) => new Organization(org_));
+        Object.assign(results, {
+            count: organizationsPage.count,
+            next: organizationsPage.next,
+        });
+
+        return results as PaginatedResource<SerializedOrganization>;
     });
     implementationMixin(cvat.organizations.activate, (organization) => {
-        checkObjectType('organization', organization, null, Organization);
+        checkObjectType('organization', organization, null, { cls: Organization, name: 'Organization' });
         config.organization = {
             organizationID: organization.id,
             organizationSlug: organization.slug,
         };
     });
-    implementationMixin(cvat.organizations.deactivate, async () => {
+    implementationMixin(cvat.organizations.deactivate, () => {
         config.organization = {
             organizationID: null,
             organizationSlug: null,
@@ -386,9 +402,10 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
     implementationMixin(cvat.organizations.invitations, (async (filter) => {
         checkFilter(filter, {
             page: isInteger,
+            pageSize: isInteger,
             filter: isString,
         });
-        checkExclusiveFields(filter, ['filter'], ['page']);
+        checkExclusiveFields(filter, ['filter'], ['page', 'pageSize']);
 
         const invitationsData = await serverProxy.organizations.invitations(filter);
         const invitations = invitationsData.results.map((invitationData) => new Invitation({ ...invitationData }));
@@ -398,6 +415,7 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
     implementationMixin(cvat.webhooks.get, async (filter) => {
         checkFilter(filter, {
             page: isInteger,
+            pageSize: isInteger,
             id: isInteger,
             projectId: isInteger,
             filter: isString,
@@ -405,7 +423,7 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
             sort: isString,
         });
 
-        checkExclusiveFields(filter, ['id', 'projectId'], ['page']);
+        checkExclusiveFields(filter, ['id', 'projectId'], ['page', 'pageSize']);
 
         const searchParams = filterFieldsToSnakeCase(filter, ['projectId']);
 
@@ -429,10 +447,13 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
         return new ConsensusSettings({ ...settings, descriptions });
     });
 
-    implementationMixin(cvat.analytics.quality.reports, async (filter: QualityReportsFilter) => {
+    implementationMixin(cvat.analytics.quality.reports, async (
+        filter: Parameters<CVATCore['analytics']['quality']['reports']>[0],
+        aggregate?: Parameters<CVATCore['analytics']['quality']['reports']>[1],
+    ) => {
         checkFilter(filter, {
             page: isInteger,
-            pageSize: isPageSize,
+            pageSize: isInteger,
             parentID: isInteger,
             projectID: isInteger,
             taskID: isInteger,
@@ -445,7 +466,7 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
 
         const params = fieldsToSnakeCase({ ...filter, sort: '-created_date' });
 
-        const reportsData = await serverProxy.analytics.quality.reports(params);
+        const reportsData = await serverProxy.analytics.quality.reports(params, aggregate);
         const reports = Object.assign(
             reportsData.map((report) => new QualityReport({ ...report })),
             { count: reportsData.count },
@@ -507,10 +528,19 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
 
                     // decorate the original conflict to avoid changing it
                     const description = descriptionList.join(', ');
+                    const requirements = Array.from(new Map(objectConflicts.flatMap((conflict) => (
+                        conflict.requirements.map((requirement) => [
+                            requirement.id, requirement,
+                        ] as const)
+                    ))).values()).sort((a, b) => a.id - b.id);
                     const visibleConflict = new Proxy(mainObjectConflict, {
                         get(target, prop) {
                             if (prop === 'description') {
                                 return description;
+                            }
+
+                            if (prop === 'requirements') {
+                                return requirements;
                             }
 
                             // By default, it looks like Reflect.get(target, prop, receiver)
@@ -528,19 +558,56 @@ export default function implementAPI(cvat: CVATCore): CVATCore {
 
         return mergedConflicts;
     });
-    implementationMixin(cvat.analytics.quality.settings.get, async (filter: QualitySettingsFilter) => {
-        checkFilter(filter, {
-            taskID: isInteger,
+    implementationMixin(
+        cvat.analytics.quality.settings.get, async (
+            filter: Parameters<CVATCore['analytics']['quality']['settings']['get']>[0],
+            aggregate?: Parameters<CVATCore['analytics']['quality']['settings']['get']>[1],
+        ) => {
+            checkFilter(filter, {
+                taskID: isInteger,
+                projectID: isInteger,
+                parentType: isString,
+            });
+
+            const params = fieldsToSnakeCase(filter);
+
+            const settingsList = await serverProxy.analytics.quality.settings.get(params, aggregate);
+            const { descriptions, requirementDescriptions } = await getQualitySettingsSchemaDescriptions();
+
+            const settings = settingsList.map((setting) => new QualitySettings({
+                ...setting,
+                descriptions,
+                requirement_descriptions: requirementDescriptions,
+            }));
+            return settings;
         });
+    implementationMixin(
+        cvat.analytics.quality.requirements.get, async (
+            filter: Parameters<CVATCore['analytics']['quality']['requirements']['get']>[0],
+            aggregate?: Parameters<CVATCore['analytics']['quality']['requirements']['get']>[1],
+        ) => {
+            checkFilter(filter, {
+                id: isInteger,
+                settingsId: isInteger,
+                taskId: isInteger,
+                projectId: isInteger,
+                annotationType: isString,
+                enabled: isBoolean,
+                page: isInteger,
+                pageSize: isInteger,
+                filter: isString,
+                search: isString,
+                sort: isString,
+            });
 
-        const params = fieldsToSnakeCase(filter);
-
-        const settings = await serverProxy.analytics.quality.settings.get(params);
-        const schema = await getServerAPISchema();
-        const descriptions = convertDescriptions(schema.components.schemas.QualitySettings.properties);
-
-        return new QualitySettings({ ...settings, descriptions });
-    });
+            const params = fieldsToSnakeCase(filter as QualityRequirementsFilter);
+            const requirementsData = await serverProxy.analytics.quality.requirements.get(params, aggregate);
+            const requirements = Object.assign(
+                requirementsData.map((requirement) => new QualityRequirement({ ...requirement })),
+                { count: requirementsData.count },
+            );
+            return requirements;
+        });
     implementationMixin(cvat.analytics.events.export, async (
         filter: AnalyticsEventsFilter,
     ): ReturnType<CVATCore['analytics']['events']['export']> => {

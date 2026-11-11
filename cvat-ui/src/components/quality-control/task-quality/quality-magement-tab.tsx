@@ -2,64 +2,48 @@
 //
 // SPDX-License-Identifier: MIT
 
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { useRef } from 'react';
 import { Row } from 'antd/es/grid';
 import Text from 'antd/lib/typography/Text';
 
 import {
-    FramesMetaData, QualitySettings, Task, TaskValidationLayout,
+    FramesMetaData, Job, QualitySettings, Task, TaskValidationLayout,
 } from 'cvat-core-wrapper';
 import Card from 'components/common/cvat-card';
+import JobItem from 'components/job-item/job-item';
+import { validationModeText } from 'utils/quality';
+import { usePageSizeData } from 'utils/hooks';
 import AllocationTable from './allocation-table';
 
 interface Props {
     task: Task;
+    gtJobInstance: Job;
     gtJobId: number;
     gtJobMeta: FramesMetaData;
     validationLayout: TaskValidationLayout;
     qualitySettings: QualitySettings;
+    onJobUpdate(job: Job, fields: Parameters<Job['save']>[0]): void;
     onDeleteFrames: (frames: number[]) => void;
     onRestoreFrames: (frames: number[]) => void;
 }
 
 function QualityManagementTab(props: Readonly<Props>): JSX.Element {
     const {
-        task, gtJobId, gtJobMeta,
+        task, gtJobInstance, gtJobId, gtJobMeta,
         validationLayout, qualitySettings,
-        onDeleteFrames, onRestoreFrames,
+        onJobUpdate, onDeleteFrames, onRestoreFrames,
     } = props;
-
-    const tableRef = useRef(null);
-    const [pageSizeData, setPageSizeData] = useState({ width: 0, height: 0 });
 
     const totalCount = validationLayout.validationFrames.length;
     const excludedCount = validationLayout.disabledFrames.length;
     const activeCount = totalCount - excludedCount;
-    let validationModeText: string | null = null;
-    if (validationLayout.mode === 'gt') {
-        validationModeText = 'Ground truth';
-    } else if (validationLayout.mode === 'gt_pool') {
-        validationModeText = 'Honeypots';
-    }
+    const validationModeTextRepresentation = validationModeText(task);
 
-    useLayoutEffect(() => {
-        const resize = (): void => {
-            if (tableRef?.current) {
-                const { clientWidth, clientHeight } = tableRef.current;
-                setPageSizeData({ width: clientWidth, height: clientHeight });
-            }
-        };
-
-        resize();
-        window.addEventListener('resize', resize);
-
-        return () => {
-            window.removeEventListener('resize', resize);
-        };
-    }, []);
+    const tabRef = useRef(null);
+    const pageSizeData = usePageSizeData(tabRef);
 
     return (
-        <div className='cvat-quality-control-management-tab' ref={tableRef}>
+        <div className='cvat-quality-control-management-tab' ref={tabRef}>
             <Row className='cvat-quality-control-management-tab-summary'>
                 <Card
                     title='Total validation frames'
@@ -80,14 +64,21 @@ function QualityManagementTab(props: Readonly<Props>): JSX.Element {
                     size={{ cardSize: 8 }}
                 />
             </Row>
-            { validationModeText ? (
+            { validationModeTextRepresentation ? (
                 <Row className='cvat-quality-control-validation-mode-hint'>
                     <Text type='secondary'>
                         The task&apos;s validation mode is configured as&nbsp;
                     </Text>
-                    <Text type='secondary' strong>{validationModeText}</Text>
+                    <Text type='secondary' strong>{validationModeTextRepresentation}</Text>
                 </Row>
             ) : null}
+            <Row className='cvat-quality-control-gt-job'>
+                <JobItem
+                    task={task}
+                    job={gtJobInstance}
+                    onJobUpdate={onJobUpdate}
+                />
+            </Row>
             <AllocationTable
                 task={task}
                 gtJobId={gtJobId}

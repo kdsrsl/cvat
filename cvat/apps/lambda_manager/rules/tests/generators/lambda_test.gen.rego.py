@@ -112,10 +112,8 @@ def _get_name(prefix, **kwargs):
                 name += _get_name(prefix, **v)
         else:
             name += "".join(
-                map(
-                    lambda c: c if c.isalnum() else {"@": "_IN_"}.get(c, "_"),
-                    f"{prefix}_{str(v).upper()}",
-                )
+                c if c.isalnum() else {"@": "_IN_"}.get(c, "_")
+                for c in f"{prefix}_{str(v).upper()}"
             )
 
     return name
@@ -128,7 +126,7 @@ def get_name(scope, context, ownership, privilege, membership, resource):
 def is_valid(scope, context, ownership, privilege, membership, resource):
     if context == "sandbox" and membership:
         return False
-    if scope == "list" and ownership != "None":
+    if scope == "list" and ownership != "none":
         return False
 
     return True

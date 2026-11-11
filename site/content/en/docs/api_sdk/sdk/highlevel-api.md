@@ -24,7 +24,7 @@ from cvat_sdk import make_client, models
 from cvat_sdk.core.proxies.tasks import ResourceType, Task
 
 # Create a Client instance bound to a local server and authenticate using basic auth
-with make_client(host="http://localhost", credentials=('user', 'password')) as client:
+with make_client("http://localhost", credentials=('user', 'password')) as client:
     # Let's create a new task.
 
     # Fill in task parameters first.
@@ -88,10 +88,9 @@ It is the starting point for using CVAT SDK.
 A `Client` instance allows you to:
 - configure connection options with the `Config` class
 - check server API compatibility with the current SDK version
-- deduce server connection scheme (`https` or `http`) automatically
 - manage user session with the `login()`, `logout()` and other methods
-- obtain Repository objects with the `users`, `tasks`, `jobs` and other members
-- reach to lower-level APIs with the corresponding members
+- obtain high-level server object wrappers with the `users`, `tasks`, `jobs` and other members
+- reach lower-level APIs to send raw requests, typically via the `api` member of the object
 
 An instance of `Client` can be created directly by calling the class constructor
 or with the utility function `cvat_sdk.core.client.make_client()` which can handle
@@ -108,7 +107,7 @@ You can create and start using a `Client` instance this way:
 ```python
 from cvat_sdk import make_client
 
-with make_client('http://localhost', port='8080', credentials=('user', 'password')) as client:
+with make_client("https://app.cvat.ai", credentials=("user", "password")) as client:
     ...
 ```
 
@@ -123,21 +122,155 @@ from cvat_sdk import Config, Client
 config = Config()
 # set up some config fields ...
 
-with Client('http://localhost:8080', config=config) as client:
-    client.login(('user', 'password'))
+with Client("https://app.cvat.ai", config=config) as client:
+    client.login(("user", "password"))
     ...
 ```
 
-> **Note**: Historically, the SDK has allowed the URL scheme (`http:` or `https:`)
-> to be omitted, and would attempt to automatically detect the protocol.
-> This behavior is deprecated due to being inherently insecure,
-> and will be removed in a future version.
-> To avoid future breakage, make sure to specify the scheme explicitly.
+{{% alert title="Note" color="primary" %}}
+Historically, the SDK has allowed the URL scheme (`http:` or `https:`)
+to be omitted, and would attempt to automatically detect the protocol.
+This automatic detection has been removed due to being inherently insecure.
+Now, if the scheme is omitted, the SDK assumes `https:`.
+For clarity, it is recommended to always specify the scheme explicitly.
+{{% /alert %}}
 
 When the server is located, its version is checked. If an unsupported version is found,
 an error can be raised or suppressed (controlled by `config.allow_unsupported_server`).
 If the error is suppressed, some SDK functions may not work as expected with this server.
 By default, a warning is raised and the error is suppressed.
+
+### Authentication
+
+High-level SDK supports 2 authentication options:
+- Personal Access Token (PAT) authentication, with an access token value
+- Password authentication, with a username and a password
+
+Personal Access Token (PAT) authentication requires a token that can be configured
+in the user settings section in the UI. It is the recommended authentication option
+for most API clients. {{< ilink "/docs/api_sdk/access_tokens" "Read more." >}}
+
+Password authentication requires a username and password pair. For better security it's
+recommended to use a Personal Access Token (PAT) instead, if possible.
+
+{{< tabpane text=true >}}
+
+{{%tab header="Personal Access Token (PAT) authentication" %}}
+
+```python
+from cvat_sdk import make_client
+
+with make_client("https://app.cvat.ai", access_token="token") as client:
+    ...
+```
+
+{{% /tab %}}
+
+{{%tab header="Password authentication" %}}
+
+```python
+from cvat_sdk import make_client
+
+with make_client("https://app.cvat.ai", credentials=("user", "password")) as client:
+    ...
+```
+
+{{% /tab %}}
+
+{{< /tabpane >}}
+
+With the `make_client()` function, the `Client` object create will perform authentication
+automatically for you. If you want more fine-grained control over the requests,
+there are several methods available:
+- `client.login()` - logs the user in using the specified credentials
+- `client.logout()` - logs the user out
+- `client.has_credentials()` - allows to check whether the `client` object is authenticated
+
+Example:
+```python
+from cvat_sdk.core.client import Client, AccessTokenCredentials
+
+with Client("https://app.cvat.ai") as client:
+    client.login(AccessTokenCredentials("token"))
+    # ...
+```
+
+If the `Client` is used as a context manager (with the `with` keyword), it automatically calls
+`logout()` before exiting.
+
+### Persistent authentication (profiles)
+
+The SDK ships an on-disk store that lets scripts and pipelines reuse a saved
+server URL and Personal Access Token (PAT) without re-entering credentials.
+The store is the same file the CVAT CLI uses
+({{< ilink "/docs/api_sdk/cli#persistent-authentication-profiles" "see the CLI docs" >}}
+for the exact path and permission requirements): profiles created from the
+CLI are visible to the SDK and vice-versa.
+
+#### Building a `Client` from a profile
+
+```python
+from cvat_sdk import AuthStore, make_client_from_profile
+
+_, profile = AuthStore().get_default_profile()
+with make_client_from_profile(profile) as client:
+    ...  # already logged in with the profile's PAT
+```
+
+Or by name:
+
+```python
+from cvat_sdk import AuthStore, make_client_from_profile
+
+profile = AuthStore().get_profile("mycvat")
+with make_client_from_profile(profile) as client:
+    ...
+```
+
+#### Building a `Client` from CLI-style arguments
+
+`make_client_from_cli` applies the same host/credential resolution order as
+`cvat-cli` - useful when writing SDK-based scripts that should honor the same
+`--profile` / `--server-host` / `--auth` / `CVAT_ACCESS_TOKEN` conventions:
+
+```python
+import argparse
+from cvat_sdk import make_client_from_cli
+from cvat_sdk.core.auth import configure_client_auth_arguments
+
+parser = argparse.ArgumentParser()
+configure_client_auth_arguments(parser)   # registers the shared auth flags
+parser.add_argument("--task-id", type=int, required=True)
+args = parser.parse_args()
+
+with make_client_from_cli(args) as client:
+    task = client.tasks.retrieve(args.task_id)
+    print(task.name)
+```
+
+`configure_client_auth_arguments` adds the exact same flag spellings the CLI
+uses (`--profile`, `--server-host`, `--server-port`, `--auth`, `--insecure`,
+`--organization`) so downstream scripts stay drop-in compatible with the CLI's
+authentication conventions.
+
+#### Public API summary
+
+- `cvat_sdk.AuthStore` - reads and writes the on-disk `auth.json`, enforces
+  `0600`/`0700` permissions, provides CRUD for profiles, the default profile,
+  and the default server URL.
+- `cvat_sdk.ProfileEntry` - immutable value class (`server`, `token`,
+  `created_date`) representing one saved profile.
+- `cvat_sdk.get_auth_store_path()` - the path to the store on the current
+  platform.
+- `cvat_sdk.make_client_from_profile(profile, *, logger=None, config=None,
+  check_server_version=False)` - construct and authenticate a `Client` from a
+  `ProfileEntry`.
+- `cvat_sdk.make_client_from_cli(parsed_args, *, logger=None, store=None)` -
+  construct and authenticate a `Client` from an argparse `Namespace`
+  (typically produced by `configure_client_auth_arguments`) using the CLI's
+  full resolution order.
+- `cvat_sdk.core.auth.configure_client_auth_arguments(parser)` - register the
+  shared auth flags on an `argparse.ArgumentParser`.
 
 ### Users and organizations
 
@@ -207,6 +340,26 @@ tasks = client.tasks.list()
 ```
 
 After calling these functions, we obtain local objects representing their server counterparts.
+The `list()` method accepts the same filtering, search, and ordering query parameters supported
+by the corresponding server endpoint. Simple equality filters can be passed directly:
+
+```python
+completed_project_tasks = client.tasks.list(project_id=123, status="completed")
+demo_projects = client.projects.list(search="demo", sort="-updated_date")
+```
+
+For richer conditions, compose expressions with the `cvat_sdk.core.filters` helpers instead of
+hand-writing JSON Logic:
+
+```python
+from cvat_sdk.core.filters import F
+
+# completed tasks in projects 1, 2, or 3
+tasks = client.tasks.list(filter=(F.status == "completed") & F.project_id.one_of([1, 2, 3]))
+```
+
+See [Filtering lists](#filtering-lists) for the full set of operators, keyword lookups, and
+how multiple conditions are combined.
 
 Object fields can be updated with the `update()` method. Note that the set of fields that can be
 modified can be different from what is available for reading.
@@ -249,3 +402,79 @@ Entity and Repository operations depends on the object type.
 You can learn more about entity members and how model parameters are passed to functions [here](../lowlevel-api).
 
 The implementation for these components is located in `cvat_sdk.core.proxies`.
+
+## Filtering lists
+
+Every Repository `list()` method accepts the same filtering, search, and ordering query
+parameters as the corresponding server endpoint. There are four ways to express a filter,
+from the simplest to the most powerful.
+
+### Simple equality filters
+
+Pass field values directly as keyword arguments. They are sent to the server as-is:
+
+```python
+completed_project_tasks = client.tasks.list(project_id=123, status="completed")
+demo_projects = client.projects.list(search="demo", sort="-updated_date")
+```
+
+### Filter expressions (the `F` object)
+
+For richer conditions, build expressions with the `F` object from `cvat_sdk.core.filters`
+instead of hand-writing JSON Logic. Field expressions combine with `&` (and), `|` (or) and
+`~` (not). Wrap each comparison in parentheses, because Python binds `&`/`|` tighter than
+comparison operators:
+
+```python
+from cvat_sdk.core.filters import F
+
+# completed tasks in projects 1, 2, or 3
+tasks = client.tasks.list(filter=(F.status == "completed") & F.project_id.one_of([1, 2, 3]))
+
+# tasks named like "demo" OR with no assignee
+tasks = client.tasks.list(filter=F.name.contains("demo") | ~F.assignee.is_set())
+```
+
+The available field helpers are:
+
+| Helper | Meaning |
+| --- | --- |
+| `F.field == value` | equals |
+| `F.field != value` | not equals |
+| `F.field < / <= / > / >= value` | ordering comparisons |
+| `F.field.one_of([...])` | value is in the given list |
+| `F.field.contains(substring)` | substring/membership match |
+| `F.field.between(low, high)` | value is within the inclusive range |
+| `F.field.is_set()` | field has a (non-null) value |
+
+Use `F["weird-name"]` (item access) for field names that aren't valid Python identifiers.
+
+### Keyword lookups
+
+For simple AND-only filters you can skip the `F` object and use keyword lookups, where the
+operator is a suffix on the keyword name:
+
+```python
+tasks = client.tasks.list(project_id__in=[1, 2, 3], name__contains="demo", id__gte=10)
+```
+
+The supported suffixes are `__in`, `__contains`, `__lt`, `__lte`, `__gt`, `__gte`, `__ne`,
+`__between`, and `__isset`. Multiple lookups in the same call are combined with `and`.
+
+### Combining and raw forms
+
+Keyword lookups and a `filter=` expression provided in the same call are combined with `and`,
+so you can mix the two styles freely:
+
+```python
+# (name contains "demo") AND (id >= 10)
+tasks = client.tasks.list(filter=F.name.contains("demo"), id__gte=10)
+```
+
+If you already have JSON Logic, the raw form is still accepted — pass either a `dict` or a
+JSON string to `filter=`:
+
+```python
+tasks = client.tasks.list(filter={"==": [{"var": "id"}, 42]})
+tasks = client.tasks.list(filter='{"==": [{"var": "id"}, 42]}')
+```

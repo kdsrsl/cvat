@@ -9,7 +9,7 @@ import { labelName, taskName } from '../../support/const';
 context('Filter property "shape" work correctly', () => {
     const issueId = '1444';
     const createRectangleShape2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Shape',
         labelName,
         firstX: 250,
@@ -31,6 +31,7 @@ context('Filter property "shape" work correctly', () => {
     };
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTaskJob(taskName);
     });
 

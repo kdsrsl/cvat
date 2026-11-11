@@ -5,23 +5,32 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from cvat.apps.engine.models import Job, Task
-from cvat.apps.quality_control.models import QualitySettings
+from cvat.apps.engine.models import Project, Task
+from cvat.apps.quality_control.models import (
+    QualitySettings,
+    ensure_base_quality_requirements,
+)
 
 
-@receiver(post_save, sender=Task, dispatch_uid=__name__ + ".save_task-initialize_quality_settings")
-@receiver(post_save, sender=Job, dispatch_uid=__name__ + ".save_job-initialize_quality_settings")
-def __save_task__initialize_quality_settings(
-    instance: Task | Job, created: bool, raw: bool, **kwargs
+def _ensure_base_requirements_for_task(task: Task) -> None:
+    quality_settings, _ = QualitySettings.objects.get_or_create(task_id=task.id)
+    ensure_base_quality_requirements(quality_settings)
+
+
+def _ensure_base_requirements_for_project(project: Project) -> None:
+    quality_settings, _ = QualitySettings.objects.get_or_create(project_id=project.id)
+    ensure_base_quality_requirements(quality_settings)
+
+
+@receiver(post_save, sender=Project)
+def __save_project__initialize_quality_settings(
+    instance: Project, created: bool, raw: bool, **kwargs
 ):
-    # Initializes default quality settings for the task
-    # this is done in a signal to decouple this component from the engine app
     if created and not raw:
-        if isinstance(instance, Task):
-            task = instance
-        elif isinstance(instance, Job):
-            task = instance.segment.task
-        else:
-            assert False
+        _ensure_base_requirements_for_project(instance)
 
-        QualitySettings.objects.get_or_create(task=task)
+
+@receiver(post_save, sender=Task)
+def __save_task__initialize_quality_settings(instance: Task, created: bool, **kwargs):
+    if created and not kwargs.get("raw"):
+        _ensure_base_requirements_for_task(instance)

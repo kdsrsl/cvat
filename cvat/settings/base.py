@@ -15,28 +15,24 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/2.0/ref/settings/
 """
 
-import mimetypes
+import ast
 import os
-import sys
 import tempfile
 import urllib
 from datetime import timedelta
-from enum import Enum
+from enum import Enum, IntEnum
+from pathlib import Path
 
 from attr.converters import to_bool
 from corsheaders.defaults import default_headers
+from django.core.exceptions import ImproperlyConfigured
 from logstash_async.constants import constants as logstash_async_constants
 
 from cvat import __version__
+from cvat.apps.iam.password_validation import DEFAULT_MIN_PASSWORD_LENGTH
 
-mimetypes.add_type("application/wasm", ".wasm", True)
-
-from pathlib import Path
-
-from django.core.exceptions import ImproperlyConfigured
-
-# Build paths inside the project like this: os.path.join(BASE_DIR, ...)
-BASE_DIR = str(Path(__file__).parents[2])
+# Build paths inside the project like this: BASE_DIR / ...
+BASE_DIR = Path(os.environ.get("CVAT_BASE_DIR", Path(__file__).parents[2]))
 
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 INTERNAL_IPS = ["127.0.0.1"]
@@ -52,9 +48,8 @@ def generate_secret_key():
 
     from django.utils.crypto import get_random_string
 
-    keys_dir = os.path.join(BASE_DIR, "keys")
-    if not os.path.isdir(keys_dir):
-        os.mkdir(keys_dir)
+    keys_dir = BASE_DIR / "keys"
+    keys_dir.mkdir(exist_ok=True)
 
     secret_key_fname = "secret_key.py"  # nosec
 
@@ -67,20 +62,50 @@ def generate_secret_key():
         f.flush()
 
         try:
-            os.link(f.name, os.path.join(keys_dir, secret_key_fname))
+            os.link(f.name, keys_dir / secret_key_fname)
         except FileExistsError:
             # Somebody else created the secret key first.
             # Discard ours and use theirs.
             pass
 
 
+def load_secret_key() -> str:
+    """
+    Loads secret_key.py while avoiding code execution.
+    The keys directory has to be writable by the django user, so if the server
+    is tricked by an attacker into overwriting this file, this will at least
+    prevent the attacker from executing arbitrary code.
+    """
+
+    secret_key_path = BASE_DIR / "keys/secret_key.py"
+    module_node = ast.parse(secret_key_path.read_text(), secret_key_path)
+
+    secret_key = None
+
+    for statement_node in module_node.body:
+        error_prefix = f"{secret_key_path}:{statement_node.lineno}: "
+        match statement_node:
+            case ast.Assign(targets=[ast.Name("SECRET_KEY")]):
+                secret_key = ast.literal_eval(statement_node.value)
+                if not isinstance(secret_key, str):
+                    raise ImproperlyConfigured(error_prefix + "SECRET_KEY must be a string")
+            case _:
+                raise ImproperlyConfigured(
+                    error_prefix + "unsupported statement; only SECRET_KEY assignment is allowed"
+                )
+
+    if secret_key is None:
+        raise ImproperlyConfigured(f"{secret_key_path}: no SECRET_KEY assignment found")
+
+    return secret_key
+
+
 if not SECRET_KEY:
     try:
-        sys.path.append(BASE_DIR)
-        from keys.secret_key import SECRET_KEY  # pylint: disable=unused-import
-    except ModuleNotFoundError:
+        SECRET_KEY = load_secret_key()
+    except FileNotFoundError:
         generate_secret_key()
-        from keys.secret_key import SECRET_KEY
+        SECRET_KEY = load_secret_key()
 
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 INSTALLED_APPS = [
@@ -91,7 +116,6 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django_rq",
-    "compressor",
     "django_sendfile",
     "dj_rest_auth",
     "dj_rest_auth.registration",
@@ -99,6 +123,7 @@ INSTALLED_APPS = [
     "django_filters",
     "rest_framework",
     "rest_framework.authtoken",
+    "rest_framework_api_key",
     "drf_spectacular",
     "django.contrib.sites",
     "allauth",
@@ -121,10 +146,35 @@ INSTALLED_APPS = [
     "cvat.apps.quality_control",
     "cvat.apps.redis_handler",
     "cvat.apps.consensus",
+    "cvat.apps.access_tokens",
+    "cvat.apps.growth",
 ]
+
+AUTH_USER_MODEL = "iam.User"
 
 SITE_ID = 1
 
+
+DEFAULT_DB_BULK_CREATE_BATCH_SIZE = int(os.getenv("CVAT_DEFAULT_DB_BULK_CREATE_BATCH_SIZE", 5000))
+
+
+def parse_num_proxies(value: str | None) -> int | None:
+    if value in (None, ""):
+        return None
+
+    try:
+        num_proxies = int(value)
+    except (TypeError, ValueError):
+        raise ImproperlyConfigured("CVAT_NUM_PROXIES must be an integer")
+
+    if num_proxies < 0:
+        raise ImproperlyConfigured("CVAT_NUM_PROXIES must be a non-negative integer")
+
+    return num_proxies
+
+
+# NOTE @sosov: DRF does not have a max_page_size setting out of the box
+REST_FRAMEWORK_MAX_PAGE_SIZE = 500
 REST_FRAMEWORK = {
     "DEFAULT_PARSER_CLASSES": [
         "rest_framework.parsers.JSONParser",
@@ -135,13 +185,13 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
-        "cvat.apps.iam.permissions.PolicyEnforcer",
+        "cvat.apps.access_tokens.permissions.PolicyEnforcer",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.TokenAuthentication",
-        "cvat.apps.iam.authentication.SignatureAuthentication",
+        "cvat.apps.access_tokens.authentication.AccessTokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.BasicAuthentication",
+        "cvat.apps.iam.authentication.BasicAuthenticationEx",
     ],
     "DEFAULT_VERSIONING_CLASS": "rest_framework.versioning.AcceptHeaderVersioning",
     "ALLOWED_VERSIONS": ("2.0"),
@@ -161,10 +211,14 @@ REST_FRAMEWORK = {
     "URL_FORMAT_OVERRIDE": "scheme",
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": "100/minute",
+        # dj-rest-auth views define this scope. Keep them unthrottled by default.
+        "dj_rest_auth": None,
     },
+    "NUM_PROXIES": parse_num_proxies(os.getenv("CVAT_NUM_PROXIES", "0")),
     "DEFAULT_METADATA_CLASS": "rest_framework.metadata.SimpleMetadata",
     "DEFAULT_SCHEMA_CLASS": "cvat.apps.iam.schema.CustomAutoSchema",
     "EXCEPTION_HANDLER": "cvat.apps.events.handlers.handle_viewset_exception",
@@ -175,6 +229,10 @@ REST_AUTH = {
     "REGISTER_SERIALIZER": "cvat.apps.iam.serializers.RegisterSerializerEx",
     "LOGIN_SERIALIZER": "cvat.apps.iam.serializers.LoginSerializerEx",
     "PASSWORD_RESET_SERIALIZER": "cvat.apps.iam.serializers.PasswordResetSerializerEx",
+    # Define password-setting serializers explicitly so CVAT controls length limits
+    # instead of inheriting hardcoded third-party defaults.
+    "PASSWORD_RESET_CONFIRM_SERIALIZER": "cvat.apps.iam.serializers.PasswordResetConfirmSerializerEx",
+    "PASSWORD_CHANGE_SERIALIZER": "cvat.apps.iam.serializers.PasswordChangeSerializerEx",
     "OLD_PASSWORD_FIELD_ENABLED": True,
 }
 
@@ -195,6 +253,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.middleware.gzip.GZipMiddleware",
     "cvat.apps.engine.middleware.RequestTrackingMiddleware",
+    "cvat.apps.engine.middleware.LastActivityMiddleware",
     "crum.CurrentRequestUserMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -204,12 +263,6 @@ MIDDLEWARE = [
 ]
 
 UI_URL = ""
-
-STATICFILES_FINDERS = [
-    "django.contrib.staticfiles.finders.FileSystemFinder",
-    "django.contrib.staticfiles.finders.AppDirectoriesFinder",
-    "compressor.finders.CompressorFinder",
-]
 
 ROOT_URLCONF = "cvat.urls"
 
@@ -237,12 +290,20 @@ IAM_DEFAULT_ROLE = "user"
 IAM_ADMIN_ROLE = "admin"
 # Index in the list below corresponds to the priority (0 has highest priority)
 IAM_ROLES = [IAM_ADMIN_ROLE, "user", "worker"]
-IAM_OPA_HOST = "http://opa:8181"
-IAM_OPA_DATA_URL = f"{IAM_OPA_HOST}/v1/data"
+IAM_OPA_URL = os.getenv("CVAT_OPA_URL", "http://opa:8181")
+IAM_OPA_DATA_URL = f"{IAM_OPA_URL}/v1/data"
 LOGIN_URL = "rest_login"
 LOGIN_REDIRECT_URL = "/"
 
-OBJECTS_NOT_RELATED_WITH_ORG = ["user", "lambda_function", "lambda_request", "server", "request"]
+OBJECTS_NOT_RELATED_WITH_ORG = [
+    "user",
+    "lambda_function",
+    "lambda_request",
+    "server",
+    "request",
+    "access_token",
+    "growth",
+]
 
 # ORG settings
 ORG_INVITATION_CONFIRM = "No"
@@ -256,7 +317,7 @@ AUTHENTICATION_BACKENDS = [
 
 # https://github.com/pennersr/django-allauth
 ACCOUNT_EMAIL_VERIFICATION = "none"
-ACCOUNT_AUTHENTICATION_METHOD = "username_email"
+ACCOUNT_LOGIN_METHODS = {"username", "email"}
 
 # set UI url to redirect after a successful e-mail confirmation
 # changed from '/auth/login' to '/auth/email-confirmation' for email confirmation message
@@ -284,21 +345,37 @@ redis_inmem_host = os.getenv("CVAT_REDIS_INMEM_HOST", "localhost")
 redis_inmem_port = os.getenv("CVAT_REDIS_INMEM_PORT", 6379)
 redis_inmem_password = os.getenv("CVAT_REDIS_INMEM_PASSWORD", "")
 
+
+class REDIS_INMEM_DATABASES(IntEnum):
+    RQ = 0
+    CACHE = 1
+
+
 REDIS_INMEM_SETTINGS = {
     "HOST": redis_inmem_host,
     "PORT": redis_inmem_port,
-    "DB": 0,
+    "DB": REDIS_INMEM_DATABASES.RQ,
     "PASSWORD": redis_inmem_password,
+    "REDIS_CLIENT_KWARGS": {
+        # Work around an RQ < 2.0 bug where Redis socket timeouts can be too short
+        # for blocking operations such as BLPOP. Fixed upstream in RQ 2.0:
+        # https://github.com/rq/rq/pull/2120
+        "socket_timeout": None,
+    },
 }
 
 RQ_QUEUES = {
     CVAT_QUEUES.IMPORT_DATA.value: {
         **REDIS_INMEM_SETTINGS,
         "DEFAULT_TIMEOUT": "4h",
+        # custom fields
+        "PARSED_JOB_ID_CLASS": "cvat.apps.engine.rq.ImportRequestId",
     },
     CVAT_QUEUES.EXPORT_DATA.value: {
         **REDIS_INMEM_SETTINGS,
         "DEFAULT_TIMEOUT": "4h",
+        # custom fields
+        "PARSED_JOB_ID_CLASS": "cvat.apps.engine.rq.ExportRequestId",
     },
     CVAT_QUEUES.AUTO_ANNOTATION.value: {
         **REDIS_INMEM_SETTINGS,
@@ -306,7 +383,7 @@ RQ_QUEUES = {
     },
     CVAT_QUEUES.WEBHOOKS.value: {
         **REDIS_INMEM_SETTINGS,
-        "DEFAULT_TIMEOUT": "1h",
+        "DEFAULT_TIMEOUT": "25s",
     },
     CVAT_QUEUES.NOTIFICATIONS.value: {
         **REDIS_INMEM_SETTINGS,
@@ -315,6 +392,8 @@ RQ_QUEUES = {
     CVAT_QUEUES.QUALITY_REPORTS.value: {
         **REDIS_INMEM_SETTINGS,
         "DEFAULT_TIMEOUT": "1h",
+        # custom fields
+        "PARSED_JOB_ID_CLASS": "cvat.apps.quality_control.rq.QualityRequestId",
     },
     CVAT_QUEUES.CLEANING.value: {
         **REDIS_INMEM_SETTINGS,
@@ -327,6 +406,8 @@ RQ_QUEUES = {
     CVAT_QUEUES.CONSENSUS.value: {
         **REDIS_INMEM_SETTINGS,
         "DEFAULT_TIMEOUT": "1h",
+        # custom fields
+        "PARSED_JOB_ID_CLASS": "cvat.apps.consensus.rq.ConsensusRequestId",
     },
 }
 
@@ -371,16 +452,20 @@ PERIODIC_RQ_JOBS = [
         # Run once a day
         "cron_string": "0 18 * * *",
     },
+    {
+        "queue": CVAT_QUEUES.CLEANING.value,
+        "id": "cron_instance_tmp_directories_cleanup",
+        "func": "cvat.apps.dataset_manager.cron.cleanup_instance_tmp_directories",
+        # Run once a day
+        "cron_string": "0 20 * * *",
+    },
+    {
+        "queue": CVAT_QUEUES.CLEANING.value,
+        "id": "clear_unusable_access_tokens",
+        "func": "cvat.apps.access_tokens.cron.clear_unusable_access_tokens",
+        "cron_string": "0 0 * * 0",
+    },
 ]
-
-# JavaScript and CSS compression
-# https://django-compressor.readthedocs.io
-
-COMPRESS_CSS_FILTERS = [
-    "compressor.filters.css_default.CssAbsoluteFilter",
-    "compressor.filters.cssmin.rCSSMinFilter",
-]
-COMPRESS_JS_FILTERS = []  # No compression for js files (template literals were compressed bad)
 
 # Password validation
 # https://docs.djangoproject.com/en/2.0/ref/settings/#auth-password-validators
@@ -391,12 +476,16 @@ AUTH_PASSWORD_VALIDATORS = [
     },
     {
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": DEFAULT_MIN_PASSWORD_LENGTH},
     },
     {
         "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
     },
     {
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
+    },
+    {
+        "NAME": "cvat.apps.iam.password_validation.MaximumLengthPasswordValidator",
     },
 ]
 
@@ -409,8 +498,6 @@ TIME_ZONE = os.getenv("TZ", "Etc/UTC")
 
 USE_I18N = True
 
-USE_L10N = True
-
 USE_TZ = True
 
 CSRF_COOKIE_NAME = "csrftoken"
@@ -419,59 +506,56 @@ CSRF_COOKIE_NAME = "csrftoken"
 # https://docs.djangoproject.com/en/2.0/howto/static-files/
 
 STATIC_URL = "/static/"
-STATIC_ROOT = os.path.join(BASE_DIR, "static")
-os.makedirs(STATIC_ROOT, exist_ok=True)
+STATIC_ROOT = BASE_DIR / "static"
+STATIC_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Make sure to update other config files when updating these directories
-DATA_ROOT = os.path.join(BASE_DIR, "data")
+DATA_ROOT = BASE_DIR / "data"
 
-MEDIA_DATA_ROOT = os.path.join(DATA_ROOT, "data")
-os.makedirs(MEDIA_DATA_ROOT, exist_ok=True)
+MEDIA_DATA_ROOT = DATA_ROOT / "data"
+MEDIA_DATA_ROOT.mkdir(parents=True, exist_ok=True)
 
-CACHE_ROOT = os.path.join(DATA_ROOT, "cache")
-os.makedirs(CACHE_ROOT, exist_ok=True)
+CACHE_ROOT = DATA_ROOT / "cache"
+CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 
-EXPORT_CACHE_ROOT = os.path.join(CACHE_ROOT, "export")
-os.makedirs(EXPORT_CACHE_ROOT, exist_ok=True)
+EXPORT_CACHE_ROOT = CACHE_ROOT / "export"
+EXPORT_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 
-EVENTS_LOCAL_DB_ROOT = os.path.join(BASE_DIR, "events")
-os.makedirs(EVENTS_LOCAL_DB_ROOT, exist_ok=True)
-EVENTS_LOCAL_DB_FILE = os.path.join(
+EVENTS_LOCAL_DB_ROOT = BASE_DIR / "events"
+EVENTS_LOCAL_DB_ROOT.mkdir(parents=True, exist_ok=True)
+EVENTS_LOCAL_DB_FILE = Path(
     EVENTS_LOCAL_DB_ROOT,
     os.getenv("CVAT_EVENTS_LOCAL_DB_FILENAME", "events.db"),
 )
-if not os.path.exists(EVENTS_LOCAL_DB_FILE):
-    open(EVENTS_LOCAL_DB_FILE, "w").close()
+EVENTS_LOCAL_DB_FILE.touch(exist_ok=True)
 
-JOBS_ROOT = os.path.join(DATA_ROOT, "jobs")
-os.makedirs(JOBS_ROOT, exist_ok=True)
+JOBS_ROOT = DATA_ROOT / "jobs"
+JOBS_ROOT.mkdir(parents=True, exist_ok=True)
 
-TASKS_ROOT = os.path.join(DATA_ROOT, "tasks")
-os.makedirs(TASKS_ROOT, exist_ok=True)
+TASKS_ROOT = DATA_ROOT / "tasks"
+TASKS_ROOT.mkdir(parents=True, exist_ok=True)
 
-PROJECTS_ROOT = os.path.join(DATA_ROOT, "projects")
-os.makedirs(PROJECTS_ROOT, exist_ok=True)
+PROJECTS_ROOT = DATA_ROOT / "projects"
+PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
 
-ASSETS_ROOT = os.path.join(DATA_ROOT, "assets")
-os.makedirs(ASSETS_ROOT, exist_ok=True)
+ASSETS_ROOT = DATA_ROOT / "assets"
+ASSETS_ROOT.mkdir(parents=True, exist_ok=True)
 
-SHARE_ROOT = os.path.join(BASE_DIR, "share")
-os.makedirs(SHARE_ROOT, exist_ok=True)
+SHARE_ROOT = BASE_DIR / "share"
+SHARE_ROOT.mkdir(parents=True, exist_ok=True)
 
-MODELS_ROOT = os.path.join(DATA_ROOT, "models")
-os.makedirs(MODELS_ROOT, exist_ok=True)
+LOGS_ROOT = BASE_DIR / "logs"
+LOGS_ROOT.mkdir(parents=True, exist_ok=True)
 
-LOGS_ROOT = os.path.join(BASE_DIR, "logs")
-os.makedirs(LOGS_ROOT, exist_ok=True)
+MIGRATIONS_LOGS_ROOT = LOGS_ROOT / "migrations"
+MIGRATIONS_LOGS_ROOT.mkdir(parents=True, exist_ok=True)
 
-MIGRATIONS_LOGS_ROOT = os.path.join(LOGS_ROOT, "migrations")
-os.makedirs(MIGRATIONS_LOGS_ROOT, exist_ok=True)
+CLOUD_STORAGE_ROOT = DATA_ROOT / "storages"
+CLOUD_STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
-CLOUD_STORAGE_ROOT = os.path.join(DATA_ROOT, "storages")
-os.makedirs(CLOUD_STORAGE_ROOT, exist_ok=True)
-
-TMP_FILES_ROOT = os.path.join(DATA_ROOT, "tmp")
-os.makedirs(TMP_FILES_ROOT, exist_ok=True)
+TMP_FILES_ROOT = DATA_ROOT / "tmp"
+TMP_FILES_ROOT.mkdir(parents=True, exist_ok=True)
+IGNORE_TMP_FOLDER_CLEANUP_ERRORS = True
 
 # logging is known to be unreliable with RQ when using async transports
 vector_log_handler = os.getenv("VECTOR_EVENT_HANDLER", "AsynchronousLogstashHandler")
@@ -490,18 +574,10 @@ LOGGING = {
             "filters": [],
             "formatter": "standard",
         },
-        "server_file": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "level": "DEBUG",
-            "filename": os.path.join(BASE_DIR, "logs", "cvat_server.log"),
-            "formatter": "standard",
-            "maxBytes": 1024 * 1024 * 50,  # 50 MB
-            "backupCount": 5,
-        },
         "dataset_handler": {
             "class": "logging.handlers.RotatingFileHandler",
             "level": "DEBUG",
-            "filename": os.path.join(BASE_DIR, "logs", "cvat_server_dataset.log"),
+            "filename": LOGS_ROOT / "cvat_server_dataset.log",
             "formatter": "standard",
             "maxBytes": 1024 * 1024 * 50,  # 50 MB
             "backupCount": 3,
@@ -521,7 +597,7 @@ LOGGING = {
         },
     },
     "root": {
-        "handlers": ["console", "server_file"],
+        "handlers": ["console"],
     },
     "loggers": {
         "cvat": {
@@ -566,7 +642,8 @@ CVAT_PREVIEW_CACHE_TTL = 3600 * 24 * 7  # 7 days
 
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": f"redis://:{urllib.parse.quote(redis_inmem_password)}@{redis_inmem_host}:{redis_inmem_port}/{REDIS_INMEM_DATABASES.CACHE}",
     },
     "media": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
@@ -590,8 +667,14 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-organization",
 ]
 
+CORS_EXPOSE_HEADERS = [
+    "Content-Range",
+    "X-Checksum",
+    "X-Chunk-Size",
+    "X-Updated-Date",
+]
+
 TUS_MAX_FILE_SIZE = 26843545600  # 25gb
-TUS_DEFAULT_CHUNK_SIZE = 104857600  # 100 mb
 
 # This setting makes request secure if X-Forwarded-Proto: 'https' header is specified by our proxy
 # More about forwarded headers - https://doc.traefik.io/traefik/getting-started/faq/#what-are-the-forwarded-headers-when-proxying-http-requests
@@ -656,18 +739,28 @@ SPECTACULAR_SETTINGS = {
         "ShapeType": "cvat.apps.engine.models.ShapeType",
         "OperationStatus": "cvat.apps.engine.models.StateChoice",
         "ChunkType": "cvat.apps.engine.models.DataChoice",
+        "MediaType": "cvat.apps.engine.models.MediaType",
+        "Dimension": "cvat.apps.engine.models.DimensionType",
         "StorageMethod": "cvat.apps.engine.models.StorageMethodChoice",
         "JobStatus": "cvat.apps.engine.models.StatusChoice",
         "JobStage": "cvat.apps.engine.models.StageChoice",
         "JobType": "cvat.apps.engine.models.JobType",
-        "QualityReportTarget": "cvat.apps.quality_control.models.QualityReportTarget",
+        "TaskMode": "cvat.apps.engine.models.TaskMode",
         "StorageType": "cvat.apps.engine.models.StorageChoice",
         "SortingMethod": "cvat.apps.engine.models.SortingMethod",
         "WebhookType": "cvat.apps.webhooks.models.WebhookTypeChoice",
+        "AllWebhookType": "cvat.apps.webhooks.serializers.AllWebhookTypeChoice",
         "WebhookContentType": "cvat.apps.webhooks.models.WebhookContentTypeChoice",
-        "RequestStatus": "cvat.apps.engine.models.RequestStatus",
+        "RequestStatus": "cvat.apps.redis_handler.serializers.RequestStatus",
         "ValidationMode": "cvat.apps.engine.models.ValidationMode",
         "FrameSelectionMethod": "cvat.apps.engine.models.JobFrameSelectionMethod",
+        "AnnotationConflictType": "cvat.apps.quality_control.models.AnnotationConflictType",
+        "AnnotationConflictSeverity": "cvat.apps.quality_control.models.AnnotationConflictSeverity",
+        "AnnotationConflictAnnotationType": "cvat.apps.quality_control.models.AnnotationType",
+        "MismatchingAnnotationKind": "cvat.apps.quality_control.models.MismatchingAnnotationKind",
+        "QualityTargetMetric": "cvat.apps.quality_control.models.QUALITY_TARGET_METRIC_CHOICES",
+        "QualityPointSizeBase": "cvat.apps.quality_control.models.PointSizeBase",
+        "QualityReportTarget": "cvat.apps.quality_control.models.QualityReportTarget",
     },
     # Coercion of {pk} to {id} is controlled by SCHEMA_COERCE_PATH_PK. Additionally,
     # some libraries (e.g. drf-nested-routers) use "_pk" suffixed path variables.
@@ -676,6 +769,8 @@ SPECTACULAR_SETTINGS = {
     "SCHEMA_PATH_PREFIX": "/api",
     "SCHEMA_PATH_PREFIX_TRIM": False,
     "GENERIC_ADDITIONAL_PROPERTIES": None,
+    # https://github.com/tfranzel/drf-spectacular/issues/1543
+    "REDOC_DIST": "https://cdn.jsdelivr.net/npm/redoc@2",
 }
 
 # set similar UI restrictions
@@ -711,6 +806,10 @@ else:
 
 # Database
 # https://docs.djangoproject.com/en/3.2/ref/settings/#databases
+
+# configured in seconds.
+CVAT_DB_LOCK_TIMEOUT = int(os.getenv("CVAT_DB_LOCK_TIMEOUT", 10))
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -721,6 +820,7 @@ DATABASES = {
         "PORT": os.getenv("CVAT_POSTGRES_PORT", 5432),
         "OPTIONS": {
             "application_name": os.getenv("CVAT_POSTGRES_APPLICATION_NAME", "cvat"),
+            "options": f"-c lock_timeout={CVAT_DB_LOCK_TIMEOUT * 1000}",
         },
     }
 }
@@ -729,14 +829,13 @@ BUCKET_CONTENT_MAX_PAGE_SIZE = 500
 
 IMPORT_CACHE_FAILED_TTL = timedelta(days=30)
 IMPORT_CACHE_SUCCESS_TTL = timedelta(hours=1)
-IMPORT_CACHE_CLEAN_DELAY = timedelta(hours=12)
 
 ASSET_MAX_SIZE_MB = 10
 ASSET_SUPPORTED_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf")
 ASSET_MAX_IMAGE_SIZE = 1920
-ASSET_MAX_COUNT_PER_GUIDE = 30
+ASSET_MAX_COUNT_PER_GUIDE = 150
 
-SMOKESCREEN_ENABLED = True
+SMOKESCREEN_ENABLED = to_bool(os.getenv("SMOKESCREEN_ENABLED", True))
 
 # By default, email backend is django.core.mail.backends.smtp.EmailBackend
 # But it won't work without additional configuration, so we set it to None
@@ -745,15 +844,16 @@ EMAIL_BACKEND = None
 
 ONE_RUNNING_JOB_IN_QUEUE_PER_USER = to_bool(os.getenv("ONE_RUNNING_JOB_IN_QUEUE_PER_USER", False))
 
+EMAIL_VALIDATORS = []
+
 # How many chunks can be prepared simultaneously during task creation in case the cache is not used
 CVAT_CONCURRENT_CHUNK_PROCESSING = int(os.getenv("CVAT_CONCURRENT_CHUNK_PROCESSING", 1))
 
-from cvat.rq_patching import update_started_job_registry_cleanup
+from cvat.rq_patching import patch_rq
 
-update_started_job_registry_cleanup()
+patch_rq()
 
-CLOUD_DATA_DOWNLOADING_MAX_THREADS_NUMBER = 4
-CLOUD_DATA_DOWNLOADING_NUMBER_OF_FILES_PER_THREAD = 1000
+CLOUD_DATA_DOWNLOADING_MAX_THREADS_NUMBER_PER_CPU = 4
 
 # Indicates the maximum number of days a file or directory is retained in the temporary directory
 TMP_FILE_OR_DIR_RETENTION_DAYS = 3
@@ -762,3 +862,18 @@ LOGO_FILENAME = "logo.svg"
 ABOUT_INFO = {
     "subtitle": "Open Data Annotation Platform",
 }
+
+if ONE_RUNNING_JOB_IN_QUEUE_PER_USER:
+    PERIODIC_RQ_JOBS.append(
+        {
+            "queue": CVAT_QUEUES.CLEANING.value,
+            "id": "cleanup_deferred_job_registry",
+            "func": "cvat.apps.redis_handler.cron.cleanup_deferred_job_registry",
+            "cron_string": "0 8 * * *",
+        }
+    )
+
+USER_LAST_ACTIVITY_UPDATE_MIN_INTERVAL = timedelta(days=1)
+
+# Health check settings
+HEALTH_CHECK = {"DISK_USAGE_MAX": int(os.getenv("CVAT_HEALTH_DISK_USAGE_MAX", 90))}

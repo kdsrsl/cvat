@@ -93,10 +93,7 @@ def eval_rule(scope, context, ownership, privilege, membership, data):
     rules = list(
         filter(lambda r: not r["limit"] or eval(r["limit"], {"resource": resource}), rules)
     )
-    if (
-        not is_same_org(data["auth"]["organization"], data["resource"]["organization"])
-        and context != "sandbox"
-    ):
+    if not is_same_org(data["auth"]["organization"], data["resource"]["organization"]):
         return False
 
     return bool(rules)
@@ -128,6 +125,8 @@ def get_data(scope, context, ownership, privilege, membership, resource, same_or
 
         if same_org:
             data["resource"]["organization"]["id"] = org_id
+    elif same_org:
+        data["resource"]["organization"] = None
 
     if ownership == "job:assignee":
         data["resource"]["target"]["is_job_staff"] = True
@@ -157,10 +156,8 @@ def _get_name(prefix, **kwargs):
                 name += _get_name(prefix, **v)
         else:
             name += "".join(
-                map(
-                    lambda c: c if c.isalnum() else {"@": "_IN_"}.get(c, "_"),
-                    f"{prefix}_{str(v).upper()}",
-                )
+                c if c.isalnum() else {"@": "_IN_"}.get(c, "_")
+                for c in f"{prefix}_{str(v).upper()}"
             )
 
     return name
@@ -172,8 +169,6 @@ def get_name(scope, context, ownership, privilege, membership, resource, same_or
 
 def is_valid(scope, context, ownership, privilege, membership, resource, same_org):
     if context == "sandbox" and membership:
-        return False
-    if context == "sandbox" and same_org:
         return False
 
     return True

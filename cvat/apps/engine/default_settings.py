@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
+import json
 import logging as log
 import os
 
@@ -12,11 +13,20 @@ logger = log.getLogger("cvat")
 
 MEDIA_CACHE_ALLOW_STATIC_CACHE = to_bool(os.getenv("CVAT_ALLOW_STATIC_CACHE", False))
 """
-Allow or disallow static media cache.
-If disabled, CVAT will only use the dynamic media cache. New tasks requesting static media cache
-will be automatically switched to the dynamic cache.
-When enabled, this option can increase data access speed and reduce server load,
+Allow or disallow static media cache for new tasks.
+If disabled, CVAT will not allow task creation with static media cache.
+New tasks requesting static media cache will be automatically switched to the dynamic cache.
+When enabled, CVAT will allow task creation with static media chunks.
+
+Static media cache can increase data access speed and reduce server load,
 but significantly increase disk space occupied by tasks.
+"""
+
+CVAT_CACHE_ITEM_MAX_SIZE = 500 * 1024 * 1024
+"""
+Kvrocks limits the item size to 512 MB, which results “Connection reset” exception.
+Let's check the data size and raise an understandable exception instead of the redis-py exception
+Sets the maximum size in bytes of a data chunk item stored on redis_ondisk
 """
 
 CVAT_CHUNK_CREATE_TIMEOUT = 50
@@ -31,7 +41,6 @@ Sets the frequency of checking the readiness of the chunk
 default_export_cache_ttl = 60 * 60 * 24
 default_export_cache_lock_ttl = 30
 default_export_cache_lock_acquisition_timeout = 50
-default_export_locked_retry_interval = 60
 
 EXPORT_CACHE_TTL = os.getenv("CVAT_DATASET_CACHE_TTL")
 "Base lifetime for cached export files, in seconds"
@@ -78,22 +87,40 @@ else:
 if EXPORT_CACHE_LOCK_ACQUISITION_TIMEOUT <= EXPORT_CACHE_LOCK_TTL:
     raise ImproperlyConfigured("Lock acquisition timeout must be more than lock TTL")
 
-EXPORT_LOCKED_RETRY_INTERVAL = os.getenv("CVAT_DATASET_EXPORT_LOCKED_RETRY_INTERVAL")
-"Retry interval for cases the export cache lock was unavailable, in seconds"
 
-if EXPORT_LOCKED_RETRY_INTERVAL is not None:
-    EXPORT_LOCKED_RETRY_INTERVAL = int(EXPORT_LOCKED_RETRY_INTERVAL)
-    logger.warning(
-        "The CVAT_DATASET_EXPORT_LOCKED_RETRY_INTERVAL is deprecated, "
-        "use CVAT_EXPORT_LOCKED_RETRY_INTERVAL instead",
-    )
-else:
-    EXPORT_LOCKED_RETRY_INTERVAL = int(
-        os.getenv("CVAT_EXPORT_LOCKED_RETRY_INTERVAL", default_export_locked_retry_interval)
-    )
+def _parse_job_retry_intervals(env_var: str, default: list[int]) -> list[int]:
+    intervals = json.loads(os.getenv(env_var, json.dumps(default)))
+    if not isinstance(intervals, list) or not all(isinstance(v, int) and v >= 0 for v in intervals):
+        raise ImproperlyConfigured(
+            f"{env_var} must be a JSON list of non-negative integers, got {intervals!r}"
+        )
+    return intervals
 
+
+EXPORT_JOB_RETRY_INTERVALS = _parse_job_retry_intervals(
+    env_var="CVAT_EXPORT_JOB_RETRY_INTERVALS", default=[60, 60, 60, 60, 60]
+)
+
+IMPORT_JOB_RETRY_INTERVALS = _parse_job_retry_intervals(
+    env_var="CVAT_IMPORT_JOB_RETRY_INTERVALS", default=[10, 20, 30]
+)
+
+# The maximum number of replica jobs that a single merge request and
+# the deprecated `consensus_replicas` task parameter accept
 MAX_CONSENSUS_REPLICAS = int(os.getenv("CVAT_MAX_CONSENSUS_REPLICAS", 11))
 if MAX_CONSENSUS_REPLICAS < 1:
     raise ImproperlyConfigured(f"MAX_CONSENSUS_REPLICAS must be >= 1, got {MAX_CONSENSUS_REPLICAS}")
 
-DEFAULT_DB_BULK_CREATE_BATCH_SIZE = int(os.getenv("CVAT_DEFAULT_DB_BULK_CREATE_BATCH_SIZE", 5000))
+DEFAULT_DB_ANNO_CHUNK_SIZE = int(os.getenv("CVAT_DEFAULT_DB_ANNO_CHUNK_SIZE", 2000))
+
+MAX_JOBS_PER_TASK = int(os.getenv("CVAT_MAX_JOBS_PER_TASK", 5_000))
+
+DEFAULT_BACKING_CS_ID = os.getenv("CVAT_DEFAULT_BACKING_CS_ID")
+"""
+ID of the default backing cloud storage for local tasks.
+If not set or blank, tasks will be stored on the filesystem.
+"""
+if DEFAULT_BACKING_CS_ID:
+    DEFAULT_BACKING_CS_ID = int(DEFAULT_BACKING_CS_ID)
+else:
+    DEFAULT_BACKING_CS_ID = None

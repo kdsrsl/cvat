@@ -7,10 +7,12 @@ import React from 'react';
 import { Col, Row } from 'antd/lib/grid';
 
 import {
-    ActiveControl, NavigationType, ToolsBlockerState, Workspace,
+    ActiveControl, NavigationType, Workspace,
 } from 'reducers';
-import { Job } from 'cvat-core-wrapper';
+import { Job, JobType } from 'cvat-core-wrapper';
+import { RectDrawingMethod } from 'cvat-canvas-wrapper';
 import { KeyMap } from 'utils/mousetrap-react';
+import { Chapter } from 'cvat-core/src/frames';
 import LeftGroup from './left-group';
 import PlayerButtons from './player-buttons';
 import PlayerNavigation from './player-navigation';
@@ -19,6 +21,8 @@ import RightGroup from './right-group';
 interface Props {
     playing: boolean;
     saving: boolean;
+    chapters: Chapter[];
+    hoveredChapter: number | null;
     frameNumber: number;
     frameFilename: string;
     frameDeleted: boolean;
@@ -31,7 +35,6 @@ interface Props {
     undoShortcut: string;
     redoShortcut: string;
     drawShortcut: string;
-    switchToolsBlockerShortcut: string;
     playPauseShortcut: string;
     deleteFrameShortcut: string;
     nextFrameShortcut: string;
@@ -40,10 +43,12 @@ interface Props {
     backwardShortcut: string;
     navigationType: NavigationType;
     focusFrameInputShortcut: string;
+    searchFrameByNameShortcut: string;
     activeControl: ActiveControl;
-    toolsBlockerState: ToolsBlockerState;
+    rectDrawingMethod?: RectDrawingMethod;
     annotationFilters: object[];
     initialOpenGuide: boolean;
+    showSearchFrameByName: boolean;
     keyMap: KeyMap;
     jobInstance: Job;
     ranges: string;
@@ -58,6 +63,9 @@ interface Props {
     onFirstFrame(): void;
     onLastFrame(): void;
     onSearchAnnotations(direction: 'forward' | 'backward'): void;
+    onSearchChapters(direction: 'forward' | 'backward'): void;
+    onSelectChapter(id: number): void;
+    setHoveredChapter(id: number | null): void;
     onSliderChange(value: number): void;
     onInputChange(value: number): void;
     onURLIconClick(): void;
@@ -65,11 +73,11 @@ interface Props {
     onUndoClick(): void;
     onRedoClick(): void;
     onFinishDraw(): void;
-    onSwitchToolsBlockerState(): void;
     onDeleteFrame(): void;
     onRestoreFrame(): void;
     switchNavigationBlocked(blocked: boolean): void;
     setNavigationType(navigationType: NavigationType): void;
+    switchShowSearchPallet(visible: boolean): void;
 }
 
 export default function AnnotationTopBarComponent(props: Props): JSX.Element {
@@ -78,6 +86,8 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
         undoAction,
         redoAction,
         playing,
+        chapters,
+        hoveredChapter,
         ranges,
         frameNumber,
         frameFilename,
@@ -89,7 +99,6 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
         undoShortcut,
         redoShortcut,
         drawShortcut,
-        switchToolsBlockerShortcut,
         playPauseShortcut,
         deleteFrameShortcut,
         nextFrameShortcut,
@@ -97,8 +106,9 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
         forwardShortcut,
         backwardShortcut,
         focusFrameInputShortcut,
+        searchFrameByNameShortcut,
         activeControl,
-        toolsBlockerState,
+        rectDrawingMethod,
         annotationFilters,
         initialOpenGuide,
         navigationType,
@@ -115,6 +125,9 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
         onFirstFrame,
         onLastFrame,
         onSearchAnnotations,
+        onSearchChapters,
+        onSelectChapter,
+        setHoveredChapter,
         onSliderChange,
         onInputChange,
         onURLIconClick,
@@ -122,11 +135,12 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
         onUndoClick,
         onRedoClick,
         onFinishDraw,
-        onSwitchToolsBlockerState,
         onDeleteFrame,
         onRestoreFrame,
         setNavigationType,
         switchNavigationBlocked,
+        switchShowSearchPallet,
+        showSearchFrameByName,
     } = props;
 
     const playerItems: [JSX.Element, number][] = [];
@@ -141,6 +155,7 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
             forwardShortcut={forwardShortcut}
             backwardShortcut={backwardShortcut}
             navigationType={navigationType}
+            chapters={chapters}
             keyMap={keyMap}
             workspace={workspace}
             onPrevFrame={onPrevFrame}
@@ -151,6 +166,9 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
             onLastFrame={onLastFrame}
             onSwitchPlay={onSwitchPlay}
             onSearchAnnotations={onSearchAnnotations}
+            onSearchChapters={onSearchChapters}
+            onHoveredChapter={setHoveredChapter}
+            onSelectChapter={onSelectChapter}
             setNavigationType={setNavigationType}
         />
     ), 0]);
@@ -161,12 +179,16 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
             startFrame={startFrame}
             stopFrame={stopFrame}
             playing={playing}
+            chapters={chapters}
+            hoveredChapter={hoveredChapter}
             ranges={ranges}
             frameNumber={frameNumber}
             frameFilename={frameFilename}
             frameDeleted={frameDeleted}
+            frameDeletionAvailable={jobInstance.type !== JobType.REPLICA}
             deleteFrameShortcut={deleteFrameShortcut}
             focusFrameInputShortcut={focusFrameInputShortcut}
+            searchFrameByNameShortcut={searchFrameByNameShortcut}
             inputFrameRef={inputFrameRef}
             keyMap={keyMap}
             workspace={workspace}
@@ -177,6 +199,8 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
             onDeleteFrame={onDeleteFrame}
             onRestoreFrame={onRestoreFrame}
             switchNavigationBlocked={switchNavigationBlocked}
+            switchShowSearchPallet={switchShowSearchPallet}
+            showSearchFrameByName={showSearchFrameByName}
         />
     ), 10]);
 
@@ -189,13 +213,11 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
                 undoShortcut={undoShortcut}
                 redoShortcut={redoShortcut}
                 activeControl={activeControl}
+                rectDrawingMethod={rectDrawingMethod}
                 drawShortcut={drawShortcut}
-                switchToolsBlockerShortcut={switchToolsBlockerShortcut}
-                toolsBlockerState={toolsBlockerState}
                 onUndoClick={onUndoClick}
                 onRedoClick={onRedoClick}
                 onFinishDraw={onFinishDraw}
-                onSwitchToolsBlockerState={onSwitchToolsBlockerState}
                 keyMap={keyMap}
             />
             <Col className='cvat-annotation-header-player-group'>

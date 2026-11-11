@@ -6,16 +6,18 @@
 import React, {
     useState, useRef, useEffect, useCallback,
 } from 'react';
-import { useHistory } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
-import moment from 'moment';
+import dayjs from 'dayjs';
+import _ from 'lodash';
 import { Row, Col } from 'antd/lib/grid';
+import Form from 'antd/lib/form';
 import Text from 'antd/lib/typography/Text';
 import Modal from 'antd/lib/modal';
 import Button from 'antd/lib/button';
 import Space from 'antd/lib/space';
 import Input from 'antd/lib/input';
-import Popover from 'antd/lib/popover';
+import Dropdown from 'antd/lib/dropdown';
 import { Store } from 'antd/lib/form/interface';
 import {
     EditTwoTone, EnvironmentOutlined,
@@ -30,8 +32,13 @@ import {
 } from 'actions/organization-actions';
 import { OrganizationMembersQuery } from 'reducers';
 import { Organization, User } from 'cvat-core-wrapper';
-import { SortingComponent, ResourceFilterHOC, defaultVisibility } from 'components/resource-sorting-filtering';
-import Menu from 'components/dropdown-menu';
+import {
+    SortingComponent,
+    ResourceFilterHOC,
+    defaultVisibility,
+    ResourceSelectionInfo,
+} from 'components/resource-sorting-filtering';
+
 import InvitationModal from './invitation-modal';
 
 import {
@@ -46,6 +53,8 @@ export interface Props {
     onApplySearch: (search: string | null) => void;
     onApplyFilter: (filter: string | null) => void;
     onApplySorting: (sort: string | null) => void;
+    selectedCount: number;
+    onSelectAll: () => void;
 }
 
 export enum MenuActions {
@@ -57,16 +66,17 @@ const FilteringComponent = ResourceFilterHOC(
     config, localStorageRecentKeyword, localStorageRecentCapacity, predefinedFilterValues,
 );
 
-function OrganizationTopBar(props: Props): JSX.Element {
+function OrganizationTopBar(props: Readonly<Props>): JSX.Element {
     const {
         organizationInstance, userInstance, fetchMembers, query,
-        onApplyFilter, onApplySearch, onApplySorting,
+        onApplyFilter, onApplySearch, onApplySorting, selectedCount, onSelectAll,
     } = props;
     const {
         owner, createdDate, description, updatedDate, slug, name, contact,
     } = organizationInstance;
     const { id: userID } = userInstance;
     const descriptionEditingRef = useRef<HTMLDivElement>(null);
+    const editingRef = useRef({ name, contact });
     const [editingDescription, setEditingDescription] = useState(false);
     const [visibleInviteModal, setVisibleInviteModal] = useState(false);
     const [visibility, setVisibility] = useState(defaultVisibility);
@@ -129,10 +139,28 @@ function OrganizationTopBar(props: Props): JSX.Element {
         });
     };
 
-    let organizationName = name;
-    let organizationDescription = description;
-    let organizationContacts = contact;
-    const history = useHistory();
+    const onSubmitDescription = useCallback((values: { description: string }) => {
+        if (description !== values.description) {
+            dispatch(
+                updateOrganizationAsync(
+                    organizationInstance,
+                    { description: values.description },
+                ),
+            );
+        }
+        setEditingDescription(false);
+    }, [description]);
+
+    const onFinishContactsEditing = useCallback(() => {
+        if (!_.isEqual(contact, editingRef.current.contact)) {
+            dispatch(
+                updateOrganizationAsync(
+                    organizationInstance,
+                    { contact: editingRef.current.contact },
+                ),
+            );
+        }
+    }, [contact]);
 
     return (
         <>
@@ -146,54 +174,49 @@ function OrganizationTopBar(props: Props): JSX.Element {
                                 </Text>
                             </Col>
                             <Col>
-                                <Popover
+                                <Dropdown
+                                    menu={{
+                                        items: [
+                                            {
+                                                key: MenuActions.SET_WEBHOOKS,
+                                                label: <Link to='/organization/webhooks'>Setup webhooks</Link>,
+                                            },
+                                            ...(owner && userID === owner.id ? [{
+                                                type: 'divider' as const,
+                                            }, {
+                                                key: MenuActions.REMOVE_ORGANIZATION,
+                                                onClick: onRemove,
+                                                label: 'Remove organization',
+                                            }] : []),
+                                        ],
+                                        className: 'cvat-organization-actions-menu',
+                                    }}
                                     trigger={['click']}
-                                    destroyTooltipOnHide
-                                    overlayInnerStyle={{ padding: 0 }}
-                                    content={() => (
-                                        <Menu className='cvat-organization-actions-menu'>
-                                            <Menu.Item key={MenuActions.SET_WEBHOOKS}>
-                                                <a
-                                                    href='/organization/webhooks'
-                                                    onClick={(e: React.MouseEvent) => {
-                                                        e.preventDefault();
-                                                        history.push({
-                                                            pathname: '/organization/webhooks',
-                                                        });
-                                                        return false;
-                                                    }}
-                                                >
-                                                    Setup webhooks
-                                                </a>
-                                            </Menu.Item>
-                                            {owner && userID === owner.id ? (
-                                                <Menu.Item
-                                                    key={MenuActions.REMOVE_ORGANIZATION}
-                                                    onClick={onRemove}
-                                                >
-                                                    Remove organization
-                                                </Menu.Item>
-                                            ) : null}
-                                        </Menu>
-                                    )}
                                 >
                                     <Button size='middle' className='cvat-organization-page-actions-button'>
                                         <Text className='cvat-text-color'>Actions</Text>
                                         <MoreOutlined className='cvat-menu-icon' />
                                     </Button>
-                                </Popover>
+                                </Dropdown>
                             </Col>
-
                         </Row>
-
                         <Text
                             editable={{
-                                onChange: (value: string) => {
-                                    organizationName = value;
+                                onStart() {
+                                    editingRef.current.name = name;
                                 },
-                                onEnd: () => {
-                                    organizationInstance.name = organizationName;
-                                    dispatch(updateOrganizationAsync(organizationInstance));
+                                onChange(value: string) {
+                                    editingRef.current.name = value;
+                                },
+                                onEnd() {
+                                    if (name !== editingRef.current.name) {
+                                        dispatch(
+                                            updateOrganizationAsync(
+                                                organizationInstance,
+                                                { name: editingRef.current.name },
+                                            ),
+                                        );
+                                    }
                                 },
                             }}
                             type='secondary'
@@ -211,26 +234,23 @@ function OrganizationTopBar(props: Props): JSX.Element {
                             </span>
                         ) : (
                             <div ref={descriptionEditingRef}>
-                                <Input.TextArea
-                                    defaultValue={description}
-                                    onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => {
-                                        organizationDescription = event.target.value;
-                                    }}
-                                />
-                                <Button
-                                    className='cvat-submit-new-org-description-button'
-                                    size='small'
-                                    type='primary'
-                                    onClick={() => {
-                                        if (organizationDescription !== description) {
-                                            organizationInstance.description = organizationDescription;
-                                            dispatch(updateOrganizationAsync(organizationInstance));
-                                        }
-                                        setEditingDescription(false);
-                                    }}
+                                <Form
+                                    onFinish={onSubmitDescription}
+                                    initialValues={{ description }}
                                 >
-                                    Submit
-                                </Button>
+                                    <Form.Item name='description'>
+                                        <Input.TextArea />
+                                    </Form.Item>
+                                    <Form.Item>
+                                        <Button
+                                            className='cvat-submit-new-org-description-button'
+                                            type='primary'
+                                            htmlType='submit'
+                                        >
+                                            Submit
+                                        </Button>
+                                    </Form.Item>
+                                </Form>
                             </div>
                         )}
                     </div>
@@ -243,15 +263,13 @@ function OrganizationTopBar(props: Props): JSX.Element {
                             <Text
                                 type='secondary'
                                 editable={{
-                                    onChange: (value: string) => {
-                                        organizationContacts = {
-                                            ...organizationInstance.contact, phoneNumber: value,
-                                        };
+                                    onStart() {
+                                        editingRef.current.contact = { ...contact };
                                     },
-                                    onEnd: () => {
-                                        organizationInstance.contact = organizationContacts;
-                                        dispatch(updateOrganizationAsync(organizationInstance));
+                                    onChange(value: string) {
+                                        editingRef.current.contact.phoneNumber = value;
                                     },
+                                    onEnd: onFinishContactsEditing,
                                 }}
                             >
                                 {contact.phoneNumber}
@@ -263,15 +281,13 @@ function OrganizationTopBar(props: Props): JSX.Element {
                             <Text
                                 type='secondary'
                                 editable={{
-                                    onChange: (value: string) => {
-                                        organizationContacts = {
-                                            ...organizationInstance.contact, email: value,
-                                        };
+                                    onStart() {
+                                        editingRef.current.contact = { ...contact };
                                     },
-                                    onEnd: () => {
-                                        organizationInstance.contact = organizationContacts;
-                                        dispatch(updateOrganizationAsync(organizationInstance));
+                                    onChange(value: string) {
+                                        editingRef.current.contact.email = value;
                                     },
+                                    onEnd: onFinishContactsEditing,
                                 }}
                             >
                                 {contact.email}
@@ -283,22 +299,20 @@ function OrganizationTopBar(props: Props): JSX.Element {
                             <Text
                                 type='secondary'
                                 editable={{
-                                    onChange: (value: string) => {
-                                        organizationContacts = {
-                                            ...organizationInstance.contact, location: value,
-                                        };
+                                    onStart() {
+                                        editingRef.current.contact = { ...contact };
                                     },
-                                    onEnd: () => {
-                                        organizationInstance.contact = organizationContacts;
-                                        dispatch(updateOrganizationAsync(organizationInstance));
+                                    onChange(value: string) {
+                                        editingRef.current.contact.location = value;
                                     },
+                                    onEnd: onFinishContactsEditing,
                                 }}
                             >
                                 {contact.location}
                             </Text>
                         </div>
-                        <Text type='secondary'>{`Created ${moment(createdDate).format('MMMM Do YYYY')}`}</Text>
-                        <Text type='secondary'>{`Updated ${moment(updatedDate).fromNow()}`}</Text>
+                        <Text type='secondary'>{`Created ${dayjs(createdDate).format('MMMM Do YYYY')}`}</Text>
+                        <Text type='secondary'>{`Updated ${dayjs(updatedDate).fromNow()}`}</Text>
                     </div>
                 </Col>
                 <Col span={12} className='cvat-organization-top-bar-buttons-block'>
@@ -352,10 +366,11 @@ function OrganizationTopBar(props: Props): JSX.Element {
                         onSearch={(phrase: string) => {
                             onApplySearch(phrase);
                         }}
-                        defaultValue={query.search || ''}
+                        defaultValue={query.search ?? ''}
                         className='cvat-organization-page-search-bar'
                         placeholder='Search ...'
                     />
+                    <ResourceSelectionInfo selectedCount={selectedCount} onSelectAll={onSelectAll} />
                 </Col>
                 <Col>
                     <SortingComponent

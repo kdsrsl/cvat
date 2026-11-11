@@ -4,6 +4,10 @@
 // SPDX-License-Identifier: MIT
 
 import { SerializedUser } from './server-response-types';
+import { UserModifiableFields } from './server-request-types';
+import PluginRegistry from './plugins';
+import { fieldsToSnakeCase } from './common';
+import serverProxy from './server-proxy';
 
 export default class User {
     public readonly id: number;
@@ -19,6 +23,11 @@ export default class User {
     public readonly isActive: boolean;
     public readonly isVerified: boolean;
     public readonly hasAnalyticsAccess: boolean;
+    public readonly cvatUsageReason: string;
+    public readonly primaryRole: string;
+    public readonly plannedActivities: string[];
+    public readonly dataTypes: string[];
+    public readonly discoverySource: string;
 
     constructor(initialData: SerializedUser) {
         const data = {
@@ -35,6 +44,11 @@ export default class User {
             is_active: null,
             email_verification_required: null,
             has_analytics_access: null,
+            cvat_usage_reason: '',
+            primary_role: '',
+            planned_activities: [] as string[],
+            data_types: [] as string[],
+            discovery_source: '',
         };
 
         for (const property in data) {
@@ -85,6 +99,21 @@ export default class User {
                 hasAnalyticsAccess: {
                     get: () => data.has_analytics_access,
                 },
+                cvatUsageReason: {
+                    get: () => data.cvat_usage_reason,
+                },
+                primaryRole: {
+                    get: () => data.primary_role,
+                },
+                plannedActivities: {
+                    get: () => [...data.planned_activities],
+                },
+                dataTypes: {
+                    get: () => [...data.data_types],
+                },
+                discoverySource: {
+                    get: () => data.discovery_source,
+                },
             }),
         );
     }
@@ -104,6 +133,31 @@ export default class User {
             is_active: this.isActive,
             email_verification_required: this.isVerified,
             has_analytics_access: this.hasAnalyticsAccess,
+            cvat_usage_reason: this.cvatUsageReason,
+            primary_role: this.primaryRole,
+            planned_activities: this.plannedActivities,
+            data_types: this.dataTypes,
+            discovery_source: this.discoverySource,
         };
     }
+
+    public async save(fields: UserModifiableFields = {}): Promise<User> {
+        const result = await PluginRegistry.apiWrapper.call(this, User.prototype.save, fields);
+        return result;
+    }
 }
+
+Object.defineProperties(User.prototype.save, {
+    implementation: {
+        writable: false,
+        enumerable: false,
+        value: async function implementation(
+            fields: Parameters<typeof User.prototype.save>[0],
+        ): Promise<User> {
+            const data = fieldsToSnakeCase(fields);
+
+            const result = await serverProxy.users.update(this.id, data);
+            return new User(result);
+        },
+    },
+});

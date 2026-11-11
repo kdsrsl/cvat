@@ -31,8 +31,10 @@ const defaultState: SettingsState = {
     workspace: {
         autoSave: false,
         autoSaveInterval: 15 * 60 * 1000,
-        aamZoomMargin: 100,
+        focusedObjectPadding: 50,
         automaticBordering: false,
+        snapToPoint: false,
+        adaptiveZoom: true,
         showObjectsTextAlways: false,
         showAllInterpolationTracks: false,
         intelligentPolygonCrop: true,
@@ -41,10 +43,7 @@ const defaultState: SettingsState = {
         controlPointsSize: 5,
         textPosition: 'auto',
         textContent: 'id,source,label,attributes,descriptions,dimensions',
-        toolsBlockerState: {
-            algorithmsLocked: false,
-            buttonVisible: false,
-        },
+        showConflictRequirements: false,
         showTagsOnFrame: true,
     },
     player: {
@@ -263,6 +262,15 @@ export default (state = defaultState, action: AnyAction): SettingsState => {
                 },
             };
         }
+        case SettingsActionTypes.SWITCH_SHOWING_CONFLICT_REQUIREMENTS: {
+            return {
+                ...state,
+                workspace: {
+                    ...state.workspace,
+                    showConflictRequirements: action.payload.showConflictRequirements,
+                },
+            };
+        }
         case SettingsActionTypes.CHANGE_BRIGHTNESS_LEVEL: {
             return {
                 ...state,
@@ -308,12 +316,12 @@ export default (state = defaultState, action: AnyAction): SettingsState => {
                 },
             };
         }
-        case SettingsActionTypes.CHANGE_AAM_ZOOM_MARGIN: {
+        case SettingsActionTypes.CHANGE_FOCUSED_OBJECT_PADDING: {
             return {
                 ...state,
                 workspace: {
                     ...state.workspace,
-                    aamZoomMargin: action.payload.aamZoomMargin,
+                    focusedObjectPadding: action.payload.focusedObjectPadding,
                 },
             };
         }
@@ -344,6 +352,24 @@ export default (state = defaultState, action: AnyAction): SettingsState => {
                 },
             };
         }
+        case SettingsActionTypes.SWITCH_SNAP_TO_POINT: {
+            return {
+                ...state,
+                workspace: {
+                    ...state.workspace,
+                    snapToPoint: action.payload.snapToPoint,
+                },
+            };
+        }
+        case SettingsActionTypes.SWITCH_ADAPTIVE_ZOOM: {
+            return {
+                ...state,
+                workspace: {
+                    ...state.workspace,
+                    adaptiveZoom: action.payload.adaptiveZoom,
+                },
+            };
+        }
         case SettingsActionTypes.SWITCH_INTELLIGENT_POLYGON_CROP: {
             return {
                 ...state,
@@ -368,15 +394,6 @@ export default (state = defaultState, action: AnyAction): SettingsState => {
                 workspace: {
                     ...state.workspace,
                     defaultApproxPolyAccuracy: action.payload.approxPolyAccuracy,
-                },
-            };
-        }
-        case SettingsActionTypes.SWITCH_TOOLS_BLOCKER_STATE: {
-            return {
-                ...state,
-                workspace: {
-                    ...state.workspace,
-                    toolsBlockerState: { ...state.workspace.toolsBlockerState, ...action.payload.toolsBlockerState },
                 },
             };
         }
@@ -440,6 +457,7 @@ export default (state = defaultState, action: AnyAction): SettingsState => {
                 filters.splice(index, 1);
             }
             filters.forEach((imageFilter) => {
+                // eslint-disable-next-line no-param-reassign
                 imageFilter.modifier.currentProcessedImage = null;
             });
             return {
@@ -456,6 +474,7 @@ export default (state = defaultState, action: AnyAction): SettingsState => {
         case AnnotationActionTypes.GET_JOB_SUCCESS: {
             const filters = [...state.imageFilters];
             filters.forEach((imageFilter) => {
+                // eslint-disable-next-line no-param-reassign
                 imageFilter.modifier.currentProcessedImage = null;
             });
 
@@ -465,18 +484,6 @@ export default (state = defaultState, action: AnyAction): SettingsState => {
                 shapes: {
                     ...state.shapes,
                     showGroundTruth: false,
-                },
-            };
-        }
-        case AnnotationActionTypes.INTERACT_WITH_CANVAS: {
-            return {
-                ...state,
-                workspace: {
-                    ...state.workspace,
-                    toolsBlockerState: {
-                        buttonVisible: true,
-                        algorithmsLocked: false,
-                    },
                 },
             };
         }

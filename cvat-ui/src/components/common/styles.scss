@@ -47,11 +47,27 @@
 
 .cvat-table-header {
     font-size: $grid-unit-size * 2;
+
+    .anticon {
+        margin-left: $grid-unit-size;
+    }
 }
 
 .cvat-table-columns-settings-menu {
     display: flex;
     flex-direction: column;
+    gap: $grid-unit-size * 0.5;
     max-height: $grid-unit-size * 40;
+    min-width: $grid-unit-size * 22;
     overflow-y: auto;
+}
+
+.cvat-table-columns-settings-hint {
+    align-self: stretch;
+    text-align: center;
+}
+
+.cvat-menu-edit-label {
+    display: flex;
+    justify-content: space-between;
 }

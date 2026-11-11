@@ -5,23 +5,31 @@
 
 /// <reference types="cypress" />
 
+import { convertClasses } from './utils';
+
 function openOrganizationsMenu() {
-    cy.get('.cvat-header-menu-user-dropdown')
-        .should('exist').and('be.visible').click();
-    cy.wait(500); // animation
+    cy.get('.cvat-header-menu-user-dropdown-user').should('be.visible');
+    cy.get('.cvat-header-menu-user-dropdown').should('be.visible');
+    cy.get('.cvat-header-menu-user-dropdown').click();
+    cy.get('.cvat-header-menu').should('be.visible');
     cy.get('.cvat-header-menu')
+        .find('[role="menuitem"]')
+        .filter(':contains("Organization")')
         .should('exist')
         .and('be.visible')
+        .and('not.have.attr', 'aria-disabled', 'true');
+    cy.get('.cvat-header-menu')
         .find('[role="menuitem"]')
         .filter(':contains("Organization")')
         .click();
+    cy.get('.cvat-header-menu-create-organization').should('be.visible');
 }
 
 Cypress.Commands.add('createOrganization', (organizationParams) => {
     openOrganizationsMenu();
     cy.get('.cvat-header-menu-create-organization')
-        .should('be.visible')
-        .click();
+        .should('be.visible');
+    cy.get('.cvat-header-menu-create-organization').click();
     cy.url().should('contain', '/organizations/create');
     const idWrapper = { id: null };
     cy.get('.cvat-create-organization-form').should('be.visible').within(() => {
@@ -40,28 +48,26 @@ Cypress.Commands.add('createOrganization', (organizationParams) => {
             });
     });
     cy.get('.cvat-organization-page').should('exist').and('be.visible');
+    cy.get('.cvat-spinner').should('not.exist');
+    cy.get('.cvat-header-menu-user-dropdown-organization')
+        .should('have.text', organizationParams.shortName);
     return cy.wrap(idWrapper);
 });
 
-Cypress.Commands.add('deleteOrganizations', (authResponse, otrganizationsToDelete) => {
-    const authKey = authResponse.body.key;
+Cypress.Commands.add('deleteOrganizations', (authHeaders, otrganizationsToDelete) => {
     cy.request({
-        url: '/api/organizations?page_size=all',
-        headers: {
-            Authorization: `Token ${authKey}`,
-        },
+        url: '/api/organizations?page_size=500',
+        headers: authHeaders,
     }).then((_response) => {
-        const responceResult = _response.body.results;
-        for (const organization of responceResult) {
+        const responseResult = _response.body.results;
+        for (const organization of responseResult) {
             const { id, slug } = organization;
             for (const organizationToDelete of otrganizationsToDelete) {
                 if (slug === organizationToDelete) {
                     cy.request({
                         method: 'DELETE',
                         url: `/api/organizations/${id}`,
-                        headers: {
-                            Authorization: `Token ${authKey}`,
-                        },
+                        headers: authHeaders,
                     });
                 }
             }
@@ -78,6 +84,7 @@ Cypress.Commands.add('activateOrganization', (organizationShortName) => {
     cy.get('.cvat-header-menu-user-dropdown-organization')
         .should('exist')
         .and('have.text', organizationShortName);
+    cy.get('.cvat-spinner').should('not.exist');
 });
 
 Cypress.Commands.add('deactivateOrganization', () => {
@@ -85,6 +92,7 @@ Cypress.Commands.add('deactivateOrganization', () => {
     cy.contains('.cvat-header-menu-organization-item', 'Personal workspace').click();
     cy.get('.cvat-header-menu-user-dropdown').should('be.visible');
     cy.get('.cvat-header-menu-user-dropdown-organization').should('not.exist');
+    cy.get('.cvat-spinner').should('not.exist');
 });
 
 Cypress.Commands.add('openOrganization', (organizationShortName) => {
@@ -155,28 +163,45 @@ Cypress.Commands.add('inviteMembersToOrganization', (members) => {
             cy.contains('button', 'Invite more').click();
         }
     }
+    cy.intercept('POST', '/api/invitations**').as('inviteOrganizationMember');
+    cy.intercept('GET', '/api/memberships**').as('getOrganizationMembersAfterInvite');
     cy.get('.cvat-organization-invitation-modal')
         .contains('button', 'OK')
         .click();
+    const invitedEmails = [];
+    for (let i = 0; i < members.length; i++) {
+        cy.wait('@inviteOrganizationMember').then((interception) => {
+            expect(interception.response.statusCode).to.be.oneOf([200, 201]);
+            invitedEmails.push(interception.request.body.email);
+        });
+    }
+    cy.wrap(invitedEmails).should('have.members', members.map((el) => el.email));
+    cy.get('.cvat-organization-invitation-modal').should('not.exist');
+    cy.wait('@getOrganizationMembersAfterInvite')
+        .its('response.statusCode')
+        .should('equal', 200);
+    cy.get('.cvat-organization-page').should('be.visible');
 });
 
 Cypress.Commands.add('removeMemberFromOrganization', (username) => {
     cy.contains('.cvat-organization-member-item-username', username)
         .parents('.cvat-organization-member-item')
-        .find('.cvat-organization-member-item-remove')
+        .find('.cvat-organization-actions-button')
+        .click();
+    cy.get('.cvat-organization-membership-actions-menu')
+        .should('exist')
+        .and('be.visible')
+        .contains('Delete')
         .click();
     cy.get('.cvat-modal-organization-member-remove')
         .contains('button', 'Yes, remove')
         .click();
 });
 
-Cypress.Commands.add('headlessCreateOrganization', (data = {}) => {
-    cy.window().then(async ($win) => {
-        const organization = new $win.cvat.classes.Organization({ ...data });
-        const result = await organization.save();
-        return cy.wrap(result);
-    });
-});
+Cypress.Commands.add('headlessCreateOrganization', (data = {}) => cy.window().then(($win) => {
+    const organization = new $win.cvat.classes.Organization(convertClasses(data, $win));
+    return cy.wrap(organization.save());
+}));
 
 Cypress.Commands.add('headlessDeleteOrganization', (orgId) => {
     cy.window().then(($win) => cy.wrap($win.cvat.organizations.get({

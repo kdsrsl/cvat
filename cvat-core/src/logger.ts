@@ -33,6 +33,19 @@ interface IgnoreRule {
     update: (previousEvent: Event, currentPayload: JSONEventPayload) => JSONEventPayload;
 }
 
+function clientIdGen(): string {
+    let val = null;
+    try {
+        // try to use 32bit integer with high entropy if available
+        [val] = crypto.getRandomValues(new Uint32Array(1));
+    } catch (_error: unknown) {
+        // fallback as a less secure option
+        val = Math.floor(Math.random() * 2 ** 32);
+    }
+
+    return val.toString().padStart(10, '0');
+}
+
 class Logger {
     public clientID: string;
     public collection: Array<Event>;
@@ -43,7 +56,13 @@ class Logger {
     public compressedScopes: Array<EventScope>;
 
     constructor() {
-        this.clientID = Date.now().toString().substr(-6);
+        try {
+            this.clientID = localStorage.getItem('clientID') ?? clientIdGen();
+            localStorage.setItem('clientID', this.clientID);
+        } catch (_error: unknown) {
+            this.clientID = clientIdGen();
+        }
+
         this.collection = [];
         this.lastSentEvent = null;
         this.isActiveChecker = () => true;
@@ -116,6 +135,29 @@ class Logger {
         const result = await PluginRegistry.apiWrapper.call(this, Logger.prototype.save);
         return result;
     }
+
+    public saveCriticalEvents(): void {
+        // Critical page-exit delivery must start synchronously, so this path intentionally bypasses plugin wrappers
+        // and does not read or update the regular event collection, save lock, or lastSentEvent chain.
+
+        const bandwidthInfo = serverProxy.server.getAndResetBandwidthInfo();
+        if (!bandwidthInfo.totalDownloadBytes) {
+            return;
+        }
+
+        const event = makeEvent(EventScope.debugInfo, {
+            obj_name: 'chunk_download_bandwidth',
+            ...bandwidthInfo,
+            client_id: this.clientID,
+            is_active: this.isActiveChecker(),
+        });
+        event.validatePayload();
+
+        serverProxy.events.save({
+            events: [event.dump()],
+            timestamp: new Date().toISOString(),
+        }, { keepalive: true }).catch(() => {});
+    }
 }
 
 Object.defineProperties(Logger.prototype.configure, {
@@ -138,7 +180,7 @@ Object.defineProperties(Logger.prototype.log, {
     implementation: {
         writable: false,
         enumerable: false,
-        value: async function implementation(
+        value: function implementation(
             this: Logger,
             scope: EventScope,
             payload: JSONEventPayload,
@@ -209,13 +251,14 @@ Object.defineProperties(Logger.prototype.save, {
             }
 
             const collectionToSend = [...this.collection];
+
             try {
                 this.saving = true;
                 this.collection = [];
                 await serverProxy.events.save({
                     events: collectionToSend.map((event) => event.dump()),
-                    previous_event: this.lastSentEvent?.dump(),
                     timestamp: new Date().toISOString(),
+                    previous_event: this.lastSentEvent?.dump(),
                 });
 
                 this.lastSentEvent = collectionToSend[collectionToSend.length - 1];

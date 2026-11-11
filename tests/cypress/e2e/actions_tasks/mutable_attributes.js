@@ -16,7 +16,7 @@ context('Mutable attribute.', () => {
     ];
 
     const createRectangleTrack2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Track',
         labelName,
         firstX: 260,
@@ -43,6 +43,7 @@ context('Mutable attribute.', () => {
     }
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTask(taskName);
         cy.addNewLabel({ name: labelName }, additionalAttrsLabelShape);
         cy.openJob();

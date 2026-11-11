@@ -42,17 +42,47 @@ export interface AdvancedConfiguration {
     startFrame?: number;
     stopFrame?: number;
     frameFilter?: string;
-    useZipChunks: boolean;
+    useZipChunks?: boolean;
     dataChunkSize?: number;
-    useCache: boolean;
+    useCache?: boolean;
     copyData?: boolean;
-    sortingMethod: SortingMethod;
-    useProjectSourceStorage: boolean;
-    useProjectTargetStorage: boolean;
-    consensusReplicas: number;
+    sortingMethod?: SortingMethod;
+    useProjectSourceStorage?: boolean;
+    useProjectTargetStorage?: boolean;
+    initialReplicas?: number;
     sourceStorage: StorageData;
     targetStorage: StorageData;
 }
+
+export enum AdvancedConfigurationSection {
+    SORTING = 'sorting',
+    COPY_DATA = 'copyData',
+    CHUNKING = 'chunking',
+    IMAGE_QUALITY = 'imageQuality',
+    FRAME_RANGE = 'frameRange',
+    CHUNK_SIZE = 'chunkSize',
+    REPLICAS = 'replicas',
+    BUG_TRACKER = 'bugTracker',
+    STORAGE = 'storage',
+}
+
+export const CV_ADVANCED_CONFIGURATION_SECTIONS = [
+    AdvancedConfigurationSection.SORTING,
+    AdvancedConfigurationSection.COPY_DATA,
+    AdvancedConfigurationSection.CHUNKING,
+    AdvancedConfigurationSection.IMAGE_QUALITY,
+    AdvancedConfigurationSection.FRAME_RANGE,
+    AdvancedConfigurationSection.CHUNK_SIZE,
+    AdvancedConfigurationSection.REPLICAS,
+    AdvancedConfigurationSection.BUG_TRACKER,
+    AdvancedConfigurationSection.STORAGE,
+] as const;
+
+export const AUDIO_ADVANCED_CONFIGURATION_SECTIONS = [
+    AdvancedConfigurationSection.REPLICAS,
+    AdvancedConfigurationSection.BUG_TRACKER,
+    AdvancedConfigurationSection.STORAGE,
+] as const;
 
 const initialValues: AdvancedConfiguration = {
     imageQuality: 70,
@@ -62,7 +92,7 @@ const initialValues: AdvancedConfiguration = {
     sortingMethod: SortingMethod.LEXICOGRAPHICAL,
     useProjectSourceStorage: true,
     useProjectTargetStorage: true,
-    consensusReplicas: 0,
+    initialReplicas: 0,
 
     sourceStorage: {
         location: StorageLocation.LOCAL,
@@ -74,6 +104,36 @@ const initialValues: AdvancedConfiguration = {
     },
 };
 
+const defaultFieldsBySection = {
+    [AdvancedConfigurationSection.SORTING]: ['sortingMethod'],
+    [AdvancedConfigurationSection.COPY_DATA]: ['copyData'],
+    [AdvancedConfigurationSection.CHUNKING]: ['useZipChunks', 'useCache'],
+    [AdvancedConfigurationSection.IMAGE_QUALITY]: ['imageQuality'],
+    [AdvancedConfigurationSection.FRAME_RANGE]: [],
+    [AdvancedConfigurationSection.CHUNK_SIZE]: [],
+    [AdvancedConfigurationSection.REPLICAS]: ['initialReplicas'],
+    [AdvancedConfigurationSection.BUG_TRACKER]: [],
+    [AdvancedConfigurationSection.STORAGE]: [
+        'useProjectSourceStorage',
+        'useProjectTargetStorage',
+        'sourceStorage',
+        'targetStorage',
+    ],
+} as const satisfies Record<AdvancedConfigurationSection, readonly (keyof AdvancedConfiguration)[]>;
+
+type DefaultFieldsForSections<Sections extends readonly AdvancedConfigurationSection[]> =
+    (typeof defaultFieldsBySection)[Sections[number]][number];
+
+export function getAdvancedConfigurationInitialValues<Sections extends readonly AdvancedConfigurationSection[]>(
+    visibleSections: Sections,
+): Pick<AdvancedConfiguration, DefaultFieldsForSections<Sections>> {
+    const fields = visibleSections.flatMap((section) => defaultFieldsBySection[section]);
+
+    return (
+        Object.fromEntries(fields.map((field) => [field, initialValues[field]]))
+    ) as Pick<AdvancedConfiguration, DefaultFieldsForSections<Sections>>;
+}
+
 interface Props {
     onSubmit(values: AdvancedConfiguration): Promise<void>;
     onChangeUseProjectSourceStorage(value: boolean): void;
@@ -82,11 +142,12 @@ interface Props {
     onChangeTargetStorageLocation: (value: StorageLocation) => void;
     onChangeSortingMethod(value: SortingMethod): void;
     projectId: number | null;
-    useProjectSourceStorage: boolean;
-    useProjectTargetStorage: boolean;
-    activeFileManagerTab: string;
+    useProjectSourceStorage?: boolean;
+    useProjectTargetStorage?: boolean;
+    activeFileManagerTab?: string;
     sourceStorageLocation: StorageLocation;
     targetStorageLocation: StorageLocation;
+    visibleSections?: readonly AdvancedConfigurationSection[];
 }
 
 function validateURL(_: RuleObject, value: string): Promise<void> {
@@ -135,6 +196,29 @@ class AdvancedConfigurationForm extends React.PureComponent<Props> {
         this.formRef = React.createRef<FormInstance>();
     }
 
+    private hasSection(section: AdvancedConfigurationSection): boolean {
+        const { visibleSections = CV_ADVANCED_CONFIGURATION_SECTIONS } = this.props;
+        return visibleSections.includes(section);
+    }
+
+    private getValuesWithoutFrameStep(values: Store): AdvancedConfiguration {
+        const entries = Object.entries(values).filter(
+            (entry: [string, unknown]): boolean => entry[0] !== 'frameStep',
+        );
+
+        return Object.fromEntries(entries) as AdvancedConfiguration;
+    }
+
+    private getFrameFilter(values: Store): Pick<AdvancedConfiguration, 'frameFilter'> {
+        if (!this.hasSection(AdvancedConfigurationSection.FRAME_RANGE)) {
+            return {};
+        }
+
+        return {
+            frameFilter: values.frameStep ? `step=${values.frameStep}` : undefined,
+        };
+    }
+
     public submit(): Promise<void> {
         const { onSubmit, projectId } = this.props;
 
@@ -145,39 +229,34 @@ class AdvancedConfigurationForm extends React.PureComponent<Props> {
                     this.formRef.current.validateFields(),
                 ]).then(([getProjectResponse, values]) => {
                     const [project] = getProjectResponse;
-                    const frameFilter = values.frameStep ? `step=${values.frameStep}` : undefined;
-                    const entries = Object.entries(values).filter(
-                        (entry: [string, unknown]): boolean => entry[0] !== frameFilter,
-                    );
+                    const sourceStorage = values.useProjectSourceStorage ?
+                        project.sourceStorage : values.sourceStorage;
+                    const targetStorage = values.useProjectTargetStorage ?
+                        project.targetStorage : values.targetStorage;
 
                     return onSubmit({
-                        ...((Object.fromEntries(entries) as any) as AdvancedConfiguration),
-                        frameFilter,
-                        sourceStorage: values.useProjectSourceStorage ?
-                            new Storage(project.sourceStorage || { location: StorageLocation.LOCAL }) :
-                            new Storage(values.sourceStorage),
-                        targetStorage: values.useProjectTargetStorage ?
-                            new Storage(project.targetStorage || { location: StorageLocation.LOCAL }) :
-                            new Storage(values.targetStorage),
+                        ...this.getValuesWithoutFrameStep(values),
+                        ...this.getFrameFilter(values),
+                        sourceStorage: new Storage(sourceStorage ?? { location: StorageLocation.LOCAL }),
+                        targetStorage: new Storage(targetStorage ?? { location: StorageLocation.LOCAL }),
                     });
                 });
             }
 
             return this.formRef.current.validateFields()
                 .then(
-                    (values: Store): Promise<void> => {
-                        const frameFilter = values.frameStep ? `step=${values.frameStep}` : undefined;
-                        const entries = Object.entries(values).filter(
-                            (entry: [string, unknown]): boolean => entry[0] !== frameFilter,
-                        );
-
-                        return onSubmit({
-                            ...((Object.fromEntries(entries) as any) as AdvancedConfiguration),
-                            frameFilter,
-                            sourceStorage: new Storage(values.sourceStorage),
-                            targetStorage: new Storage(values.targetStorage),
-                        });
-                    },
+                    (values: Store): Promise<void> => (
+                        onSubmit({
+                            ...this.getValuesWithoutFrameStep(values),
+                            ...this.getFrameFilter(values),
+                            sourceStorage: new Storage(
+                                values.sourceStorage ?? { location: StorageLocation.LOCAL },
+                            ),
+                            targetStorage: new Storage(
+                                values.targetStorage ?? { location: StorageLocation.LOCAL },
+                            ),
+                        })
+                    ),
                 );
         }
 
@@ -190,8 +269,7 @@ class AdvancedConfigurationForm extends React.PureComponent<Props> {
         }
     }
 
-    /* eslint-disable class-methods-use-this */
-    private renderCopyDataChechbox(): JSX.Element {
+    private renderCopyDataCheckbox(): JSX.Element {
         return (
             <Form.Item
                 help='If you have a low data transfer rate over the network you can copy data into CVAT to speed up work'
@@ -385,26 +463,17 @@ class AdvancedConfigurationForm extends React.PureComponent<Props> {
         );
     }
 
-    private renderConsensusReplicas(): JSX.Element {
+    private renderInitialReplicas(): JSX.Element {
         return (
             <Form.Item
-                label='Consensus Replicas'
-                name='consensusReplicas'
-                rules={[
-                    {
-                        validator: isInteger({
-                            min: 0,
-                            max: 10,
-                            filter: (intValue: number): boolean => intValue !== 1,
-                        }),
-                    },
-                ]}
+                label='Initial replicas'
+                name='initialReplicas'
+                rules={[{ validator: isInteger({ min: 0 }) }]}
             >
                 <Input
                     size='large'
                     type='number'
                     min={0}
-                    max={10}
                     step={1}
                 />
             </Form.Item>
@@ -454,61 +523,84 @@ class AdvancedConfigurationForm extends React.PureComponent<Props> {
     }
 
     public render(): JSX.Element {
-        const { activeFileManagerTab } = this.props;
+        const { activeFileManagerTab, visibleSections = CV_ADVANCED_CONFIGURATION_SECTIONS } = this.props;
+        const hasSorting = this.hasSection(AdvancedConfigurationSection.SORTING);
+        const hasCopyData = this.hasSection(AdvancedConfigurationSection.COPY_DATA);
+        const hasChunking = this.hasSection(AdvancedConfigurationSection.CHUNKING);
+        const hasImageQuality = this.hasSection(AdvancedConfigurationSection.IMAGE_QUALITY);
+        const hasFrameRange = this.hasSection(AdvancedConfigurationSection.FRAME_RANGE);
+        const hasChunkSize = this.hasSection(AdvancedConfigurationSection.CHUNK_SIZE);
+        const hasReplicas = this.hasSection(AdvancedConfigurationSection.REPLICAS);
+        const hasBugTracker = this.hasSection(AdvancedConfigurationSection.BUG_TRACKER);
+        const hasStorage = this.hasSection(AdvancedConfigurationSection.STORAGE);
+
         return (
-            <Form initialValues={initialValues} ref={this.formRef} layout='vertical'>
-                <Row>
-                    <Col>{this.renderSortingMethodRadio()}</Col>
-                </Row>
-                {activeFileManagerTab === 'share' ? (
+            <Form initialValues={getAdvancedConfigurationInitialValues(visibleSections)} ref={this.formRef} layout='vertical'>
+                {hasSorting && (
                     <Row>
-                        <Col>{this.renderCopyDataChechbox()}</Col>
+                        <Col>{this.renderSortingMethodRadio()}</Col>
                     </Row>
-                ) : null}
-                <Row>
-                    <Col span={12}>{this.renderUzeZipChunks()}</Col>
-                    <Col span={12}>{this.renderCreateTaskMethod()}</Col>
-                </Row>
-                <Row justify='start'>
-                    <Col span={7}>{this.renderImageQuality()}</Col>
-                    <Col span={7} offset={1}>
-                        {this.renderOverlap()}
-                    </Col>
-                    <Col span={7} offset={1}>
-                        {this.renderSegmentSize()}
-                    </Col>
-                </Row>
-
-                <Row justify='start'>
-                    <Col span={7}>{this.renderStartFrame()}</Col>
-                    <Col span={7} offset={1}>
-                        {this.renderStopFrame()}
-                    </Col>
-                    <Col span={7} offset={1}>
-                        {this.renderFrameStep()}
-                    </Col>
-                </Row>
-
-                <Row justify='start'>
-                    <Col span={7}>{this.renderChunkSize()}</Col>
-                </Row>
-                <Row justify='start'>
-                    <Col span={7}>
-                        {this.renderConsensusReplicas()}
-                    </Col>
-                </Row>
-
-                <Row>
-                    <Col span={24}>{this.renderBugTracker()}</Col>
-                </Row>
-                <Row justify='space-between'>
-                    <Col span={11}>
-                        {this.renderSourceStorage()}
-                    </Col>
-                    <Col span={11} offset={1}>
-                        {this.renderTargetStorage()}
-                    </Col>
-                </Row>
+                )}
+                {hasCopyData && activeFileManagerTab === 'share' && (
+                    <Row>
+                        <Col>{this.renderCopyDataCheckbox()}</Col>
+                    </Row>
+                )}
+                {hasChunking && (
+                    <Row>
+                        <Col span={12}>{this.renderUzeZipChunks()}</Col>
+                        <Col span={12}>{this.renderCreateTaskMethod()}</Col>
+                    </Row>
+                )}
+                {hasImageQuality && (
+                    <Row justify='start'>
+                        <Col span={7}>{this.renderImageQuality()}</Col>
+                        <Col span={7} offset={1}>
+                            {this.renderOverlap()}
+                        </Col>
+                        <Col span={7} offset={1}>
+                            {this.renderSegmentSize()}
+                        </Col>
+                    </Row>
+                )}
+                {hasFrameRange && (
+                    <Row justify='start'>
+                        <Col span={7}>{this.renderStartFrame()}</Col>
+                        <Col span={7} offset={1}>
+                            {this.renderStopFrame()}
+                        </Col>
+                        <Col span={7} offset={1}>
+                            {this.renderFrameStep()}
+                        </Col>
+                    </Row>
+                )}
+                {hasChunkSize && (
+                    <Row justify='start'>
+                        <Col span={7}>{this.renderChunkSize()}</Col>
+                    </Row>
+                )}
+                {hasReplicas && (
+                    <Row justify='start'>
+                        <Col span={7}>
+                            {this.renderInitialReplicas()}
+                        </Col>
+                    </Row>
+                )}
+                {hasBugTracker && (
+                    <Row>
+                        <Col span={24}>{this.renderBugTracker()}</Col>
+                    </Row>
+                )}
+                {hasStorage && (
+                    <Row justify='space-between'>
+                        <Col span={11}>
+                            {this.renderSourceStorage()}
+                        </Col>
+                        <Col span={11} offset={1}>
+                            {this.renderTargetStorage()}
+                        </Col>
+                    </Row>
+                )}
             </Form>
         );
     }

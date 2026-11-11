@@ -18,7 +18,7 @@ context('Webhooks pipeline.', () => {
         enableSSL: true,
         isActive: true,
         events: [
-            'project', 'job', 'task',
+            'Project', 'Job', 'Task', 'Dataset export',
         ],
     };
     const projectWebhookParams = {
@@ -35,7 +35,7 @@ context('Webhooks pipeline.', () => {
         enableSSL: true,
         isActive: false,
         events: [
-            'job',
+            'Job',
         ],
     };
 
@@ -43,7 +43,7 @@ context('Webhooks pipeline.', () => {
         name: 'Project for webhooks',
         label: 'car',
         attrName: 'color',
-        attrVaue: 'red',
+        attrValue: 'red',
         multiAttrParams: false,
     };
 
@@ -56,16 +56,16 @@ context('Webhooks pipeline.', () => {
             project.name,
             project.label,
             project.attrName,
-            project.attrVaue,
+            project.attrValue,
             project.multiAttrParams,
         );
     });
 
     after(() => {
         cy.logout();
-        cy.getAuthKey().then((authKey) => {
-            cy.deleteProjects(authKey, [project.name]);
-            cy.deleteOrganizations(authKey, [organizationParams.shortName]);
+        cy.task('getAuthHeaders').then((authHeaders) => {
+            cy.deleteProjects(authHeaders, [project.name]);
+            cy.deleteOrganizations(authHeaders, [organizationParams.shortName]);
         });
     });
 

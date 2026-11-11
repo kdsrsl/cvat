@@ -5,13 +5,16 @@
 
 /// <reference types="cypress" />
 
-import { taskName, labelName } from '../../support/const';
+import { labelName } from '../../support/const';
+import { defaultTaskSpec } from '../../support/default-specs';
+import { fullMatch } from '../../support/utils';
 
 context('Delete unlock/lock object', () => {
     const caseId = '24';
+    let taskId = null;
 
     const createRectangleShape2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Shape',
         firstX: 100,
         firstY: 100,
@@ -51,7 +54,7 @@ context('Delete unlock/lock object', () => {
 
     function actionOnConfirmWindow(textBuntton) {
         cy.get('.cvat-modal-confirm-remove-object').within(() => {
-            cy.contains(new RegExp(`^${textBuntton}$`, 'g')).click();
+            cy.contains(fullMatch(textBuntton)).click();
         });
     }
 
@@ -71,7 +74,21 @@ context('Delete unlock/lock object', () => {
     }
 
     before(() => {
-        cy.openTaskJob(taskName);
+        cy.prepareUserSession();
+        const { taskSpec, dataSpec, extras } = defaultTaskSpec({
+            taskName: 'Delete unlock/lock object regression',
+            labelName,
+            serverFiles: ['images/image_1.jpg'],
+        });
+        cy.headlessCreateTask(taskSpec, dataSpec, extras).then(({ taskId: tid, jobIds: [jobId] }) => {
+            taskId = tid;
+            cy.visit(`/tasks/${taskId}/jobs/${jobId}`);
+            cy.get('.cvat-canvas-container').should('be.visible');
+        });
+    });
+
+    after(() => {
+        if (taskId !== null) cy.headlessDeleteTask(taskId);
     });
 
     describe(`Testing case "${caseId}"`, () => {

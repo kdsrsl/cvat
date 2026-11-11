@@ -5,11 +5,11 @@
 
 import glob
 import os.path as osp
+import shutil
 
 from datumaro.components.dataset import Dataset, DatasetItem
 from datumaro.plugins.data_formats.open_images import OpenImagesPath
 from datumaro.util.image import DEFAULT_IMAGE_META_FILE_NAME
-from pyunpack import Archive
 
 from cvat.apps.dataset_manager.bindings import (
     GetCVATDataExtractor,
@@ -21,7 +21,7 @@ from cvat.apps.dataset_manager.bindings import (
 from cvat.apps.dataset_manager.util import make_zip_archive
 
 from .registry import dm_env, exporter, importer
-from .transformations import MaskToPolygonTransformation, RotatedBoxesToPolygons
+from .transformations import EllipsesToMasks, MaskToPolygonTransformation, RotatedBoxesToPolygons
 
 
 def find_item_ids(path):
@@ -48,6 +48,7 @@ def _export(dst_file, temp_dir, task_data, save_images=False):
         dataset = Dataset.from_extractors(extractor, env=dm_env)
         dataset.transform(RotatedBoxesToPolygons)
         dataset.transform("polygons_to_masks")
+        dataset.transform(EllipsesToMasks)
         dataset.transform("merge_instance_segments")
 
         dataset.export(temp_dir, "open_images", save_media=save_images)
@@ -57,7 +58,7 @@ def _export(dst_file, temp_dir, task_data, save_images=False):
 
 @importer(name="Open Images V6", ext="ZIP", version="1.0")
 def _import(src_file, temp_dir, instance_data, load_data_callback=None, **kwargs):
-    Archive(src_file.name).extractall(temp_dir)
+    shutil.unpack_archive(src_file.name, temp_dir, "zip")
 
     image_meta_path = osp.join(
         temp_dir, OpenImagesPath.ANNOTATIONS_DIR, DEFAULT_IMAGE_META_FILE_NAME

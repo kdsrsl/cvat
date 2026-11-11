@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: MIT
 
+import { Project, QualitySettings, Task } from 'cvat-core-wrapper';
+
 export function sorter(path: string) {
     return (obj1: any, obj2: any): number => {
         let currentObj1 = obj1;
@@ -49,4 +51,33 @@ export function tablePaginationPageSize(pageHeight: number): number {
     }
 
     return 10;
+}
+
+export function validationModeText(task: Task): string | null {
+    let result: string | null = null;
+    if (task.validationMode === 'gt') {
+        result = 'Ground truth';
+    } else if (task.validationMode === 'gt_pool') {
+        result = 'Honeypots';
+    }
+    return result;
+}
+
+export function inheritsProjectQualitySettings(
+    instance: Task | Project | null,
+    settings: QualitySettings | null,
+): instance is Task & { projectId: number } {
+    return instance instanceof Task && instance.projectId !== null && !!settings?.inherit;
+}
+
+export function getEffectiveQualitySettings(
+    instance: Task | Project,
+    settings: QualitySettings | null,
+    parentSettings: QualitySettings | null = null,
+): QualitySettings | null {
+    if (inheritsProjectQualitySettings(instance, settings)) {
+        return parentSettings;
+    }
+
+    return settings;
 }

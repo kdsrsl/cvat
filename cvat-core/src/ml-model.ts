@@ -5,7 +5,7 @@
 
 import PluginRegistry from './plugins';
 import {
-    LabelType, ModelProviders, ModelKind,
+    LabelType, ModelProviders, ModelKind, ShapeType,
 } from './enums';
 import {
     SerializedModel, ModelParams, MLModelTip, MLModelLabel,
@@ -30,8 +30,8 @@ export default class MLModel {
         return Array.isArray(this.serialized.labels_v2) ? [...this.serialized.labels_v2] : [];
     }
 
-    public get version(): number {
-        return this.serialized.version;
+    public get supportedShapeTypes(): ShapeType[] | undefined {
+        return this.serialized.supported_shape_types;
     }
 
     public get description(): string {
@@ -116,8 +116,8 @@ Object.defineProperties(MLModel.prototype.preview, {
     implementation: {
         writable: false,
         enumerable: false,
-        value: async function implementation(): Promise<string | null> {
-            return null;
+        value: async function implementation(): Promise<string> {
+            return '';
         },
     },
 });

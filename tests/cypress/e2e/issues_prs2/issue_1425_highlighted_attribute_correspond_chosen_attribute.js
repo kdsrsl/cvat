@@ -10,7 +10,7 @@ context('The highlighted attribute in AAM should correspond to the chosen attrib
     const issueId = '1425';
     let textValue = '';
     const createRectangleShape2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Shape',
         labelName,
         firstX: 250,
@@ -20,6 +20,7 @@ context('The highlighted attribute in AAM should correspond to the chosen attrib
     };
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTaskJob(taskName);
     });
 

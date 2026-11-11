@@ -7,30 +7,38 @@ import './styles.scss';
 import React, {
     useCallback, useEffect, useReducer, useState,
 } from 'react';
-import { useParams } from 'react-router';
 import { Row, Col } from 'antd/lib/grid';
 import Tabs, { TabsProps } from 'antd/lib/tabs';
 import Title from 'antd/lib/typography/Title';
 import notification from 'antd/lib/notification';
 import Result from 'antd/lib/result';
+import { useDispatch } from 'react-redux';
 
 import {
     Job, JobType, QualityReport, QualitySettings, Task,
     TaskValidationLayout, getCore, FramesMetaData,
+    Project,
 } from 'cvat-core-wrapper';
 import CVATLoadingSpinner from 'components/common/loading-spinner';
+import { ScopedStateProvider } from 'utils/scoped-state';
 import GoBackButton from 'components/common/go-back-button';
 import ResourceLink from 'components/common/resource-link';
+import { CombinedState, InstanceType } from 'reducers';
+import { updateJobAsync } from 'actions/jobs-actions';
 import { ActionUnion, createAction } from 'utils/redux';
-import { getTabFromHash } from 'utils/location-utils';
-import { fetchTask } from 'utils/fetch';
-import QualityOverviewTab from './task-quality/quality-overview-tab';
+import { useInstanceId, useInstanceType, usePlugins } from 'utils/hooks';
+import { inheritsProjectQualitySettings } from 'utils/quality';
+import QualityRequirementsTab from './quality-requirements-tab';
 import QualityManagementTab from './task-quality/quality-magement-tab';
-import QualitySettingsTab from './quality-settings-tab';
+import QualitySettingsTab, { UpdateSettingsData } from './quality-settings-tab';
 
 const core = getCore();
 
+type QualityControlTabItem = NonNullable<TabsProps['items']>[0];
+
 interface State {
+    instance: Task | Project | null;
+    instanceType: InstanceType | null;
     fetching: boolean;
     reportRefreshingStatus: string | null;
     validationLayout: TaskValidationLayout | null;
@@ -39,12 +47,16 @@ interface State {
     error: Error | null;
     qualitySettings: {
         settings: QualitySettings | null;
+        childrenSettings: QualitySettings[] | null;
+        parentSettings: QualitySettings | null;
         fetching: boolean;
     };
 }
 
 enum ReducerActionType {
     SET_FETCHING = 'SET_FETCHING',
+    SET_INSTANCE = 'SET_INSTANCE',
+    SET_INSTANCE_TYPE = 'SET_INSTANCE_TYPE',
     SET_TASK_REPORT = 'SET_TASK_REPORT',
     SET_JOBS_REPORTS = 'SET_JOBS_REPORTS',
     SET_QUALITY_SETTINGS = 'SET_QUALITY_SETTINGS',
@@ -66,8 +78,12 @@ export const reducerActions = {
     setJobsReports: (qualityReports: QualityReport[]) => (
         createAction(ReducerActionType.SET_JOBS_REPORTS, { qualityReports })
     ),
-    setQualitySettings: (qualitySettings: QualitySettings) => (
-        createAction(ReducerActionType.SET_QUALITY_SETTINGS, { qualitySettings })
+    setQualitySettings: (
+        qualitySettings: QualitySettings,
+        childrenSettings: QualitySettings[] | null = null,
+        parentSettings: QualitySettings | null = null,
+    ) => (
+        createAction(ReducerActionType.SET_QUALITY_SETTINGS, { qualitySettings, childrenSettings, parentSettings })
     ),
     setQualitySettingsFetching: (fetching: boolean) => (
         createAction(ReducerActionType.SET_QUALITY_SETTINGS_FETCHING, { fetching })
@@ -87,6 +103,12 @@ export const reducerActions = {
     setError: (error: Error) => (
         createAction(ReducerActionType.SET_ERROR, { error })
     ),
+    setInstance: (instance: Project | Task | null) => (
+        createAction(ReducerActionType.SET_INSTANCE, { instance })
+    ),
+    setInstanceType: (type: InstanceType) => (
+        createAction(ReducerActionType.SET_INSTANCE_TYPE, { type })
+    ),
 };
 
 const reducer = (state: State, action: ActionUnion<typeof reducerActions>): State => {
@@ -103,6 +125,8 @@ const reducer = (state: State, action: ActionUnion<typeof reducerActions>): Stat
             qualitySettings: {
                 ...state.qualitySettings,
                 settings: action.payload.qualitySettings,
+                childrenSettings: action.payload.childrenSettings,
+                parentSettings: action.payload.parentSettings,
             },
         };
     }
@@ -152,12 +176,38 @@ const reducer = (state: State, action: ActionUnion<typeof reducerActions>): Stat
         };
     }
 
+    if (action.type === ReducerActionType.SET_INSTANCE) {
+        return {
+            ...state,
+            instance: action.payload.instance,
+        };
+    }
+
+    if (action.type === ReducerActionType.SET_INSTANCE_TYPE) {
+        return {
+            ...state,
+            instanceType: action.payload.type,
+        };
+    }
+
     return state;
 };
 
-const supportedTabs = ['overview', 'settings', 'management'];
-function QualityControlPage(): JSX.Element {
+const supportedTabs = ['requirements', 'jobs', 'tasks', 'management', 'settings'];
+
+function getQualityTabFromHash(): string {
+    const [tab] = window.location.hash.slice(1).split('?');
+    return supportedTabs.includes(tab) ? tab : supportedTabs[0];
+}
+
+function QualityControlPageContent({ requestedInstanceType, requestedInstanceID }: {
+    requestedInstanceType: InstanceType;
+    requestedInstanceID: number;
+}): JSX.Element {
+    const reduxDispatch = useDispatch();
     const [state, dispatch] = useReducer(reducer, {
+        instance: null,
+        instanceType: null,
         fetching: true,
         reportRefreshingStatus: null,
         gtJobInstance: null,
@@ -166,36 +216,100 @@ function QualityControlPage(): JSX.Element {
         error: null,
         qualitySettings: {
             settings: null,
+            childrenSettings: null,
+            parentSettings: null,
             fetching: false,
         },
     });
 
-    const requestedInstanceID = +useParams<{ tid: string }>().tid;
+    const [activeTab, setActiveTab] = useState(getQualityTabFromHash);
 
-    const [activeTab, setActiveTab] = useState(getTabFromHash(supportedTabs));
-    const [instance, setInstance] = useState<Task | null>(null);
+    const { instance } = state;
+    const pluginTabs = usePlugins((combinedState: CombinedState) => (
+        combinedState.plugins.components.qualityControlPage.tabs.items
+    ), state, state);
 
-    const initializeData = async (id: number): Promise<void> => {
+    const receiveInstance = async (type: InstanceType, id: number): Promise<Task | Project | null> => {
+        let receivedInstance: Task | Project | null = null;
+
         try {
-            const taskInstance = await fetchTask(id);
+            dispatch(reducerActions.setFetching(true));
 
-            setInstance(taskInstance);
-            try {
-                dispatch(reducerActions.setQualitySettingsFetching(true));
-                const settings = await core.analytics.quality.settings.get({ taskID: taskInstance.id });
-                dispatch(reducerActions.setQualitySettings(settings));
-            } finally {
-                dispatch(reducerActions.setQualitySettingsFetching(false));
+            if (type === InstanceType.PROJECT) {
+                [receivedInstance] = await core.projects.get({ id });
+                dispatch(reducerActions.setGtJob(null));
+                dispatch(reducerActions.setGtJobMeta(null));
+                dispatch(reducerActions.setValidationLayout(null));
+            } else if (type === InstanceType.TASK) {
+                [receivedInstance] = await core.tasks.get({ id });
+                const gtJob = receivedInstance.jobs.find((job: Job) => job.type === JobType.GROUND_TRUTH) ?? null;
+                if (gtJob) {
+                    const validationLayout: TaskValidationLayout | null = await receivedInstance.validationLayout();
+                    const gtJobMeta = await core.frames.getMeta('job', gtJob.id) as FramesMetaData;
+                    dispatch(reducerActions.setGtJob(gtJob));
+                    dispatch(reducerActions.setGtJobMeta(gtJobMeta));
+                    dispatch(reducerActions.setValidationLayout(validationLayout));
+                }
+            } else {
+                return null;
             }
 
-            const gtJob = taskInstance.jobs.find((job: Job) => job.type === JobType.GROUND_TRUTH) ?? null;
-            if (gtJob) {
-                const validationLayout: TaskValidationLayout | null = await taskInstance.validationLayout();
-                const gtJobMeta = await core.frames.getMeta('job', gtJob.id) as FramesMetaData;
-                dispatch(reducerActions.setGtJob(gtJob));
-                dispatch(reducerActions.setGtJobMeta(gtJobMeta));
-                dispatch(reducerActions.setValidationLayout(validationLayout));
+            dispatch(reducerActions.setInstance(receivedInstance));
+            dispatch(reducerActions.setInstanceType(type));
+        } catch (error: unknown) {
+            notification.error({
+                message: `Could not receive requested ${type}`,
+                description: `${error instanceof Error ? error.message : ''}`,
+            });
+            throw error;
+        }
+
+        return receivedInstance;
+    };
+
+    const receiveSettings = async (
+        type: InstanceType,
+        id: number,
+        targetInstance: Task | Project | null,
+    ): Promise<void> => {
+        try {
+            dispatch(reducerActions.setQualitySettingsFetching(true));
+            let settings: QualitySettings | null = null;
+            let childrenSettings: QualitySettings[] | null = null;
+            let parentSettings: QualitySettings | null = null;
+            if (type === InstanceType.PROJECT) {
+                [settings] = await core.analytics.quality.settings.get({ projectID: id, parentType: 'project' });
+                childrenSettings = await core.analytics.quality.settings.get({ projectID: id, parentType: 'task' }, true);
+            } else if (type === InstanceType.TASK) {
+                [settings] = await core.analytics.quality.settings.get({ taskID: id });
+
+                // Inherited task settings remain stored, but project settings apply to its quality views.
+                if (inheritsProjectQualitySettings(targetInstance, settings)) {
+                    [parentSettings] = await core.analytics.quality.settings.get(
+                        { projectID: targetInstance.projectId, parentType: 'project' },
+                    );
+                }
+            } else {
+                return;
             }
+
+            dispatch(reducerActions.setQualitySettings(settings, childrenSettings, parentSettings));
+        } catch (error: unknown) {
+            notification.error({
+                message: 'Could not receive quality settings',
+                description: `${error instanceof Error ? error.message : ''}`,
+            });
+            throw error;
+        } finally {
+            dispatch(reducerActions.setQualitySettingsFetching(false));
+        }
+    };
+
+    const initializeData = async (): Promise<void> => {
+        try {
+            const receivedInstance = await receiveInstance(requestedInstanceType, requestedInstanceID);
+            await receiveSettings(requestedInstanceType, requestedInstanceID, receivedInstance);
+            setActiveTab(getQualityTabFromHash());
         } catch (error: unknown) {
             dispatch(reducerActions.setError(error instanceof Error ? error : new Error('Unknown error')));
         } finally {
@@ -203,54 +317,60 @@ function QualityControlPage(): JSX.Element {
         }
     };
 
-    const onSaveQualitySettings = useCallback(async (values) => {
-        try {
-            const { settings } = state.qualitySettings;
-            if (settings) {
-                settings.targetMetric = values.targetMetric;
-                settings.targetMetricThreshold = values.targetMetricThreshold / 100;
+    const onSaveQualitySettings = useCallback(async (updatedSettingsData: UpdateSettingsData) => {
+        const { settings, childrenSettings } = state.qualitySettings;
 
-                settings.maxValidationsPerJob = values.maxValidationsPerJob;
-
-                settings.lowOverlapThreshold = values.lowOverlapThreshold / 100;
-                settings.iouThreshold = values.iouThreshold / 100;
-                settings.compareAttributes = values.compareAttributes;
-                settings.emptyIsAnnotated = values.emptyIsAnnotated;
-
-                settings.oksSigma = values.oksSigma / 100;
-                settings.pointSizeBase = values.pointSizeBase;
-
-                settings.lineThickness = values.lineThickness / 100;
-                settings.lineOrientationThreshold = values.lineOrientationThreshold / 100;
-                settings.orientedLines = values.orientedLines;
-
-                settings.compareGroups = values.compareGroups;
-                settings.groupMatchThreshold = values.groupMatchThreshold / 100;
-
-                settings.checkCoveredAnnotations = values.checkCoveredAnnotations;
-                settings.objectVisibilityThreshold = values.objectVisibilityThreshold / 100;
-
-                settings.panopticComparison = values.panopticComparison;
-                try {
-                    dispatch(reducerActions.setQualitySettingsFetching(true));
-                    const responseSettings = await settings.save();
-                    dispatch(reducerActions.setQualitySettings(responseSettings));
-                    notification.info({ message: 'Settings have been updated' });
-                } catch (error: unknown) {
-                    notification.error({
-                        message: 'Could not save quality settings',
-                        description: typeof Error === 'object' ? (error as object).toString() : '',
-                    });
-                    throw error;
-                } finally {
-                    dispatch(reducerActions.setQualitySettingsFetching(false));
-                }
-            }
-            return settings;
-        } catch (e) {
-            return false;
+        if (!settings) {
+            return;
         }
-    }, [state.qualitySettings.settings]);
+
+        try {
+            dispatch(reducerActions.setQualitySettingsFetching(true));
+            const updatedSettings = await Promise.all(
+                Object.entries(updatedSettingsData).map(([, data]) => {
+                    const { settings: settingsInstance, fields } = data;
+                    return settingsInstance.save(fields);
+                }),
+            );
+            const updatedSettingsMap = updatedSettings.reduce((acc, setting) => {
+                acc[setting.id] = setting;
+                return acc;
+            }, {} as Record<number, QualitySettings>);
+            const updatedInstanceSettings = updatedSettingsMap[settings.id] ?? settings;
+            const updatedChildrenSettings = childrenSettings?.map((childSetting) => {
+                const updatedSetting = updatedSettingsMap[childSetting.id];
+                return updatedSetting || childSetting;
+            }) ?? null;
+
+            let parentSettings: QualitySettings | null = null;
+            if (inheritsProjectQualitySettings(instance, updatedInstanceSettings)) {
+                [parentSettings] = await core.analytics.quality.settings.get({
+                    projectID: instance.projectId, parentType: 'project',
+                });
+            }
+
+            dispatch(reducerActions.setQualitySettings(
+                updatedInstanceSettings, updatedChildrenSettings, parentSettings,
+            ));
+            notification.info({ message: 'Settings have been updated' });
+        } catch (error: unknown) {
+            notification.error({
+                message: 'Could not save quality settings',
+                description: error instanceof Error ? error.message : 'Unknown error',
+            });
+            throw error;
+        } finally {
+            dispatch(reducerActions.setQualitySettingsFetching(false));
+        }
+    }, [
+        state.qualitySettings.settings,
+        state.qualitySettings.childrenSettings,
+        instance,
+    ]);
+
+    const refreshQualitySettings = useCallback(async (): Promise<void> => {
+        await receiveSettings(requestedInstanceType, requestedInstanceID, instance);
+    }, [requestedInstanceType, requestedInstanceID, instance]);
 
     const updateMeta = async (): Promise<void> => {
         dispatch(reducerActions.setFetching(true));
@@ -284,18 +404,33 @@ function QualityControlPage(): JSX.Element {
         }
     }, [state.gtJobInstance]);
 
-    useEffect(() => {
-        initializeData(requestedInstanceID);
-    }, [requestedInstanceID]);
+    const onJobUpdate = useCallback((job: Job, fields: Parameters<Job['save']>[0]): void => {
+        reduxDispatch(updateJobAsync(job, fields))
+            .then(() => receiveInstance(requestedInstanceType, requestedInstanceID).catch(() => undefined))
+            .catch((error: unknown) => {
+                notification.error({
+                    message: 'Could not update job',
+                    description: error instanceof Error ? error.message : '',
+                });
+            }).finally(() => {
+                dispatch(reducerActions.setFetching(false));
+            });
+    }, [reduxDispatch, requestedInstanceType, requestedInstanceID]);
 
     useEffect(() => {
-        const onHashChange = () => setActiveTab(getTabFromHash(supportedTabs));
+        initializeData();
+    }, [requestedInstanceType, requestedInstanceID]);
+
+    useEffect(() => {
+        const onHashChange = (): void => setActiveTab(getQualityTabFromHash());
         window.addEventListener('hashchange', onHashChange);
         return () => window.removeEventListener('hashchange', onHashChange);
     }, []);
 
     useEffect(() => {
-        window.history.replaceState(null, '', `#${activeTab}`);
+        const [tab, query] = window.location.hash.slice(1).split('?');
+        const hash = activeTab === tab && query ? `${activeTab}?${query}` : activeTab;
+        window.history.replaceState(null, '', `#${hash}`);
     }, [activeTab]);
 
     const onTabKeyChange = useCallback((key: string): void => {
@@ -321,6 +456,7 @@ function QualityControlPage(): JSX.Element {
         qualitySettings: {
             settings: qualitySettings,
             fetching: qualitySettingsFetching,
+            childrenSettings: childrenQualitySettings,
         },
     } = state;
 
@@ -359,59 +495,85 @@ function QualityControlPage(): JSX.Element {
             </Col>
         );
 
-        const tabsItems: NonNullable<TabsProps['items']>[0][] = [];
+        const tabsItems: QualityControlTabItem[] = [];
+        const isTaskWithGT = instance instanceof Task && !!gtJobInstance && !!gtJobMeta;
+        const isProject = instance instanceof Project;
 
-        if (qualitySettings) {
-            tabsItems.push({
-                key: 'overview',
-                label: 'Overview',
-                children: (
-                    <QualityOverviewTab task={instance} qualitySettings={qualitySettings} />
-                ),
+        const sortedPluginTabs = [...pluginTabs].sort((first, second) => first.weight - second.weight);
+        for (const [index, { component }] of sortedPluginTabs.entries()) {
+            const renderPluginTab = component as (
+                props: { key: number; targetProps: State }
+            ) => QualityControlTabItem | null;
+            const tabItem = renderPluginTab({
+                key: index,
+                targetProps: state,
             });
-        }
 
-        if (gtJobInstance && gtJobMeta) {
-            if (validationLayout && qualitySettings) {
-                tabsItems.push({
-                    key: 'management',
-                    label: 'Management',
-                    children: (
-                        <QualityManagementTab
-                            task={instance}
-                            gtJobId={gtJobInstance.id}
-                            gtJobMeta={gtJobMeta}
-                            validationLayout={validationLayout}
-                            qualitySettings={qualitySettings}
-                            onDeleteFrames={onDeleteFrames}
-                            onRestoreFrames={onRestoreFrames}
-                        />
-                    ),
-                });
+            if (tabItem) {
+                tabsItems.push(tabItem);
             }
         }
 
-        if (qualitySettings) {
+        if (!pluginTabs.length && qualitySettings) {
             tabsItems.push({
-                key: 'settings',
-                label: 'Settings',
+                key: 'requirements',
+                label: 'Requirements',
                 children: (
-                    <QualitySettingsTab
-                        fetching={qualitySettingsFetching}
-                        qualitySettings={qualitySettings}
-                        setQualitySettings={onSaveQualitySettings}
+                    <QualityRequirementsTab
+                        instance={instance}
+                        qualitySettings={{ settings: qualitySettings, childrenSettings: childrenQualitySettings }}
                     />
                 ),
             });
         }
 
+        if (isTaskWithGT && validationLayout && qualitySettings) {
+            tabsItems.push({
+                key: 'management',
+                label: 'Management',
+                children: (
+                    <QualityManagementTab
+                        task={instance}
+                        gtJobInstance={gtJobInstance}
+                        gtJobId={gtJobInstance.id}
+                        gtJobMeta={gtJobMeta}
+                        validationLayout={validationLayout}
+                        qualitySettings={qualitySettings}
+                        onJobUpdate={onJobUpdate}
+                        onDeleteFrames={onDeleteFrames}
+                        onRestoreFrames={onRestoreFrames}
+                    />
+                ),
+            });
+        }
+
+        if ((isTaskWithGT || isProject) && qualitySettings) {
+            tabsItems.push({
+                key: 'settings',
+                label: 'Settings',
+                children: (
+                    <QualitySettingsTab
+                        instance={instance}
+                        fetching={qualitySettingsFetching}
+                        qualitySettings={state.qualitySettings}
+                        labels={instance.labels}
+                        setQualitySettings={onSaveQualitySettings}
+                        refreshQualitySettings={refreshQualitySettings}
+                    />
+                ),
+            });
+        }
+
+        const resolvedActiveTab = tabsItems.some((item) => item.key === activeTab) ?
+            activeTab : tabsItems[0]?.key?.toString();
+
         tabs = (
             <Tabs
                 type='card'
-                activeKey={activeTab}
-                defaultActiveKey='Overview'
+                activeKey={resolvedActiveTab}
+                defaultActiveKey='requirements'
                 onChange={onTabKeyChange}
-                className='cvat-task-control-tabs'
+                className='cvat-quality-control-page-tabs'
                 items={tabsItems}
             />
         );
@@ -429,6 +591,20 @@ function QualityControlPage(): JSX.Element {
                 </Row>
             </Col>
         </Row>
+    );
+}
+
+function QualityControlPage(): JSX.Element {
+    const requestedInstanceType: InstanceType = useInstanceType();
+    const requestedInstanceID = useInstanceId(requestedInstanceType);
+
+    return (
+        <ScopedStateProvider scope={`${requestedInstanceType}:${requestedInstanceID}`}>
+            <QualityControlPageContent
+                requestedInstanceType={requestedInstanceType}
+                requestedInstanceID={requestedInstanceID}
+            />
+        </ScopedStateProvider>
     );
 }
 

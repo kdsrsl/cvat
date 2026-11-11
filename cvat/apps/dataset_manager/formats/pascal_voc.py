@@ -9,14 +9,16 @@ import shutil
 from glob import glob
 
 from datumaro.components.dataset import Dataset
-from pyunpack import Archive
 
 from cvat.apps.dataset_manager.bindings import (
     GetCVATDataExtractor,
     detect_dataset,
     import_dm_annotations,
 )
-from cvat.apps.dataset_manager.formats.transformations import MaskToPolygonTransformation
+from cvat.apps.dataset_manager.formats.transformations import (
+    EllipsesToMasks,
+    MaskToPolygonTransformation,
+)
 from cvat.apps.dataset_manager.util import make_zip_archive
 
 from .registry import dm_env, exporter, importer
@@ -27,6 +29,7 @@ def _export(dst_file, temp_dir, instance_data, save_images=False):
     with GetCVATDataExtractor(instance_data, include_images=save_images) as extractor:
         dataset = Dataset.from_extractors(extractor, env=dm_env)
 
+        dataset.transform(EllipsesToMasks)
         dataset.export(temp_dir, "voc", save_media=save_images, label_map="source")
 
     make_zip_archive(temp_dir, dst_file)
@@ -34,7 +37,7 @@ def _export(dst_file, temp_dir, instance_data, save_images=False):
 
 @importer(name="PASCAL VOC", ext="ZIP", version="1.1")
 def _import(src_file, temp_dir, instance_data, load_data_callback=None, **kwargs):
-    Archive(src_file.name).extractall(temp_dir)
+    shutil.unpack_archive(src_file.name, temp_dir, "zip")
 
     # put label map from the task if not present
     labelmap_file = osp.join(temp_dir, "labelmap.txt")

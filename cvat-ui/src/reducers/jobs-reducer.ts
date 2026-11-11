@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: MIT
 
 import _ from 'lodash';
-import { JobsActions, JobsActionTypes } from 'actions/jobs-actions';
-import { JobsState } from '.';
+import { AnyAction } from 'redux';
+import { JobsActionTypes } from 'actions/jobs-actions';
+import { SelectionActionsTypes } from 'actions/selection-actions';
+import { JobsState, SelectedResourceType } from '.';
 
 const defaultState: JobsState = {
     fetchingTimestamp: Date.now(),
@@ -12,18 +14,28 @@ const defaultState: JobsState = {
     count: 0,
     query: {
         page: 1,
+        pageSize: 12,
         filter: null,
         sort: null,
         search: null,
     },
     current: [],
+    selected: [],
     previews: {},
     activities: {
         deletes: {},
     },
+    addReplicas: {
+        modalVisible: false,
+        jobs: [],
+    },
+    distributeJobs: {
+        modalVisible: false,
+        jobs: [],
+    },
 };
 
-export default (state: JobsState = defaultState, action: JobsActions): JobsState => {
+export default (state: JobsState = defaultState, action: AnyAction): JobsState => {
     switch (action.type) {
         case JobsActionTypes.GET_JOBS: {
             return {
@@ -161,6 +173,63 @@ export default (state: JobsState = defaultState, action: JobsActions): JobsState
             return {
                 ...state,
                 fetching: false,
+            };
+        }
+        case SelectionActionsTypes.DESELECT_RESOURCES: {
+            if (action.payload.resourceType === SelectedResourceType.JOBS) {
+                return {
+                    ...state,
+                    selected: state.selected.filter((id: number) => !action.payload.resourceIds.includes(id)),
+                };
+            }
+            return state;
+        }
+        case SelectionActionsTypes.SELECT_RESOURCES: {
+            if (action.payload.resourceType === SelectedResourceType.JOBS) {
+                return {
+                    ...state,
+                    selected: Array.from(new Set([...state.selected, ...action.payload.resourceIds])),
+                };
+            }
+            return state;
+        }
+        case SelectionActionsTypes.CLEAR_SELECTED_RESOURCES: {
+            return { ...state, selected: [] };
+        }
+        case JobsActionTypes.OPEN_ADD_REPLICAS_MODAL: {
+            return {
+                ...state,
+                addReplicas: {
+                    modalVisible: true,
+                    jobs: action.payload.jobs,
+                },
+            };
+        }
+        case JobsActionTypes.CLOSE_ADD_REPLICAS_MODAL: {
+            return {
+                ...state,
+                addReplicas: {
+                    ...state.addReplicas,
+                    modalVisible: false,
+                },
+            };
+        }
+        case JobsActionTypes.OPEN_DISTRIBUTE_JOBS_MODAL: {
+            return {
+                ...state,
+                distributeJobs: {
+                    modalVisible: true,
+                    jobs: action.payload.jobs,
+                },
+            };
+        }
+        case JobsActionTypes.CLOSE_DISTRIBUTE_JOBS_MODAL: {
+            return {
+                ...state,
+                distributeJobs: {
+                    ...state.distributeJobs,
+                    modalVisible: false,
+                },
             };
         }
         default: {

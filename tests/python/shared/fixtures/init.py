@@ -4,13 +4,12 @@
 
 import logging
 import os
-import shlex
+import sys
 from enum import Enum
 from http import HTTPStatus
 from pathlib import Path
 from subprocess import PIPE, CalledProcessError, run
 from time import sleep
-from typing import Union
 
 import pytest
 import requests
@@ -22,15 +21,18 @@ logger = logging.getLogger(__name__)
 
 CVAT_ROOT_DIR = next(dir.parent for dir in Path(__file__).parents if dir.name == "tests")
 CVAT_DB_DIR = ASSETS_DIR / "cvat_db"
+CLICKHOUSE_INIT_SCRIPT = "/opt/cvat/components/analytics/clickhouse/init.py"
 PREFIX = "test"
 
 CONTAINER_NAME_FILES = ["docker-compose.tests.yml"]
 
 DC_FILES = CONTAINER_NAME_FILES + [
     "docker-compose.dev.yml",
+    "tests/docker-compose.static_cache.yml",
     "tests/docker-compose.file_share.yml",
-    "tests/docker-compose.minio.yml",
-    "tests/docker-compose.test_servers.yml",
+    "tests/docker-compose.moto.yml",
+    "tests/docker-compose.pat_settings.yml",
+    "tests/docker-compose.webhook_receiver.yml",
 ]
 
 
@@ -83,6 +85,18 @@ def pytest_addoption(parser):
         action="store_true",
         help="Update data.json without running tests. (default: %(default)s)",
     )
+    group._addoption(
+        "--keep-data",
+        action="store_true",
+        help="Do not reset volumes and database. (default: %(default)s)",
+    )
+
+    group._addoption(
+        "--no-services",
+        action="store_true",
+        help=("""Don't start, stop, or seed any containers — assume the user runs
+            the test stack externally"""),
+    )
 
     group._addoption(
         "--platform",
@@ -92,38 +106,34 @@ def pytest_addoption(parser):
         help="Platform identifier - 'kube' or 'local'. (default: %(default)s)",
     )
 
+    group._addoption(
+        "--no-coverage-collection",
+        action="store_true",
+        help=("""Don't collect the code coverage results from the containers at the end of the
+            session. The coverage statistics collection inside the containers is managed
+            by the COVERAGE_PROCESS_START env. variable separately (default: %(default)s)"""),
+    )
+
 
 def _run(command, capture_output=True):
     _command = command.split() if isinstance(command, str) else command
-    try:
-        logger.debug(f"Executing a command: {_command}")
+    logger.debug(f"Executing a command: {_command}")
 
-        stdout, stderr = "", ""
-        if capture_output:
-            proc = run(_command, check=True, stdout=PIPE, stderr=PIPE)  # nosec
-            stdout, stderr = proc.stdout.decode(), proc.stderr.decode()
-        else:
-            proc = run(_command)  # nosec
+    if capture_output:
+        proc = run(_command, check=True, stdout=PIPE)  # nosec
+        stdout = proc.stdout.decode()
+    else:
+        proc = run(_command, check=True)  # nosec
+        stdout = ""
 
-        if stdout:
-            logger.debug(f"Output (stdout): {stdout}")
-        if stderr:
-            logger.debug(f"Output (stderr): {stderr}")
+    if stdout:
+        logger.debug(f"Output (stdout): {stdout}")
 
-        return stdout, stderr
-    except CalledProcessError as exc:
-        message = f"Command failed: {' '.join(map(shlex.quote, _command))}."
-        message += f"\nExit code: {exc.returncode}"
-        if capture_output:
-            message += f"\nStandard output:\n{exc.stdout.decode()}"
-            message += f"\nStandard error:\n{exc.stderr.decode()}"
-
-        pytest.exit(message)
+    return stdout
 
 
 def _kube_get_pod_name(label_filter):
-    output, _ = _run(f"kubectl get pods -l {label_filter} -o jsonpath={{.items[0].metadata.name}}")
-    return output
+    return _run(f"kubectl get pods -l {label_filter} -o jsonpath={{.items[0].metadata.name}}")
 
 
 def _kube_get_server_pod_name():
@@ -158,20 +168,20 @@ def docker_exec(container, command, capture_output=True):
     return _run(f"docker exec -u root {PREFIX}_{container}_1 {command}", capture_output)
 
 
-def docker_exec_cvat(command: Union[list[str], str]):
+def docker_exec_cvat(command: list[str] | str):
     base = f"docker exec {PREFIX}_cvat_server_1"
     _command = f"{base} {command}" if isinstance(command, str) else base.split() + command
     return _run(_command)
 
 
-def kube_exec_cvat(command: Union[list[str], str]):
+def kube_exec_cvat(command: list[str] | str):
     pod_name = _kube_get_server_pod_name()
     base = f"kubectl exec {pod_name} --"
     _command = f"{base} {command}" if isinstance(command, str) else base.split() + command
     return _run(_command)
 
 
-def container_exec_cvat(request: pytest.FixtureRequest, command: Union[list[str], str]):
+def container_exec_cvat(request: pytest.FixtureRequest, command: list[str] | str):
     platform = request.config.getoption("--platform")
     if platform == "local":
         return docker_exec_cvat(command)
@@ -230,21 +240,21 @@ def kube_restore_db():
 
 
 def docker_restore_clickhouse_db():
-    docker_exec_clickhouse_db(
+    docker_exec_cvat(
         [
             "/bin/sh",
             "-c",
-            'clickhouse-client --query "DROP TABLE IF EXISTS ${CLICKHOUSE_DB}.events;" && /docker-entrypoint-initdb.d/init.sh',
+            f'python "{CLICKHOUSE_INIT_SCRIPT}" --clear',
         ]
     )
 
 
 def kube_restore_clickhouse_db():
-    kube_exec_clickhouse_db(
+    kube_exec_cvat(
         [
             "/bin/sh",
             "-c",
-            'clickhouse-client --query "DROP TABLE IF EXISTS ${CLICKHOUSE_DB}.events;" && /bin/sh /docker-entrypoint-initdb.d/init.sh',
+            f'python "{CLICKHOUSE_INIT_SCRIPT}" --clear',
         ]
     )
 
@@ -254,6 +264,7 @@ def _get_redis_inmem_keys_to_keep():
         "rq:worker:",
         "rq:workers",
         "rq:scheduler_instance:",
+        "rq:scheduler-lock:",
         "rq:queues:",
         "cvat:applied_migrations",
         "cvat:applied_migration:",
@@ -296,24 +307,24 @@ def kube_restore_redis_ondisk():
 
 
 def running_containers():
-    return [cn for cn in _run("docker ps --format {{.Names}}")[0].split("\n") if cn]
+    return [cn for cn in _run("docker ps --format {{.Names}}").split("\n") if cn]
 
 
 def dump_db():
     if "test_cvat_server_1" not in running_containers():
         pytest.exit("CVAT is not running")
-    with open(CVAT_DB_DIR / "data.json", "w") as f:
-        try:
-            run(  # nosec
-                "docker exec test_cvat_server_1 \
-                    python manage.py dumpdata \
-                    --indent 2 --natural-foreign \
-                    --exclude=auth.permission --exclude=contenttypes".split(),
-                stdout=f,
-                check=True,
-            )
-        except CalledProcessError:
-            pytest.exit("Database dump failed.\n")
+    try:
+        run(  # nosec
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parents[1] / "utils" / "dump_test_db.py"),
+                "--output",
+                str(CVAT_DB_DIR / "data.json"),
+            ],
+            check=True,
+        )
+    except CalledProcessError:
+        pytest.exit("Database dump failed.\n")
 
 
 def create_compose_files(container_name_files):
@@ -430,24 +441,27 @@ def session_start(
     stop = session.config.getoption("--stop-services")
     start = session.config.getoption("--start-services")
     rebuild = session.config.getoption("--rebuild")
+    keep_data = session.config.getoption("--keep-data")
     cleanup = session.config.getoption("--cleanup")
     dumpdb = session.config.getoption("--dumpdb")
 
     if session.config.getoption("--collect-only"):
         if any((stop, start, rebuild, cleanup, dumpdb)):
-            raise Exception(
-                """--collect-only is not compatible with any of the other options:
-                --stop-services --start-services --rebuild --cleanup --dumpdb"""
-            )
+            raise Exception("""--collect-only is not compatible with any of the other options:
+                --stop-services --start-services --rebuild --cleanup --dumpdb""")
         return  # don't need to start the services to collect tests
+
+    if session.config.getoption("--no-services"):
+        # User manages the stack and the server externally — pytest does
+        # nothing on session start. Per-test restore fixtures still docker-exec
+        # into the user's containers (which must be named test_<service>_1).
+        return
 
     platform = session.config.getoption("--platform")
 
     if platform == "kube" and any((stop, start, rebuild, cleanup, dumpdb)):
-        raise Exception(
-            """--platform=kube is not compatible with any of the other options
-            --stop-services --start-services --rebuild --cleanup --dumpdb"""
-        )
+        raise Exception("""--platform=kube is not compatible with any of the other options
+            --stop-services --start-services --rebuild --cleanup --dumpdb""")
 
     if platform == "local":
         local_start(
@@ -456,6 +470,7 @@ def session_start(
             dumpdb,
             cleanup,
             rebuild,
+            keep_data,
             cvat_root_dir,
             cvat_db_dir,
             extra_dc_files,
@@ -463,11 +478,20 @@ def session_start(
         )
 
     elif platform == "kube":
-        kube_start(cvat_db_dir)
+        kube_start(cvat_db_dir, keep_data)
 
 
 def local_start(
-    start, stop, dumpdb, cleanup, rebuild, cvat_root_dir, cvat_db_dir, extra_dc_files, waiting_time
+    start,
+    stop,
+    dumpdb,
+    cleanup,
+    rebuild,
+    keep_data,
+    cvat_root_dir,
+    cvat_db_dir,
+    extra_dc_files,
+    waiting_time,
 ):
     if start and stop:
         raise Exception("--start-services and --stop-services are incompatible")
@@ -496,22 +520,36 @@ def local_start(
 
     start_services(dc_files, rebuild, cvat_root_dir)
 
-    docker_restore_data_volumes()
-    docker_cp(cvat_db_dir / "restore.sql", f"{PREFIX}_cvat_db_1:/tmp/restore.sql")
-    docker_cp(cvat_db_dir / "data.json", f"{PREFIX}_cvat_server_1:/tmp/data.json")
+    if not keep_data:
+        docker_restore_data_volumes()
+        docker_cp(cvat_db_dir / "restore.sql", f"{PREFIX}_cvat_db_1:/tmp/restore.sql")
+        docker_cp(cvat_db_dir / "data.json", f"{PREFIX}_cvat_server_1:/tmp/data.json")
 
-    wait_for_services(waiting_time)
+        wait_for_services(waiting_time)
 
-    docker_exec_cvat("python manage.py loaddata /tmp/data.json")
-    docker_exec(
-        Container.DB, "psql -U root -d postgres -v from=cvat -v to=test_db -f /tmp/restore.sql"
-    )
+        docker_exec_cvat(
+            [
+                "sh",
+                "-c",
+                "./manage.py flush --no-input && ./manage.py loaddata_sorted /tmp/data.json",
+            ]
+        )
+        docker_exec(
+            Container.DB, "psql -U root -d postgres -v from=cvat -v to=test_db -f /tmp/restore.sql"
+        )
+    else:
+        # The containers might still require recreation if the environment changed
+        wait_for_services(waiting_time)
 
     if start:
         pytest.exit("All necessary containers have been created and started.", returncode=0)
 
 
-def kube_start(cvat_db_dir):
+def kube_start(cvat_db_dir, keep_data):
+    if keep_data:
+        wait_for_services()
+        return
+
     kube_restore_data_volumes()
     server_pod_name = _kube_get_server_pod_name()
     db_pod_name = _kube_get_db_pod_name()
@@ -520,7 +558,9 @@ def kube_start(cvat_db_dir):
 
     wait_for_services()
 
-    kube_exec_cvat("python manage.py loaddata /tmp/data.json")
+    kube_exec_cvat(
+        ["sh", "-c", "./manage.py flush --no-input && ./manage.py loaddata_sorted /tmp/data.json"]
+    )
 
     kube_exec_cvat_db(
         [
@@ -546,23 +586,18 @@ def session_finish(session):
     platform = session.config.getoption("--platform")
 
     if platform == "local":
-        if os.environ.get("COVERAGE_PROCESS_START"):
+        if os.environ.get("COVERAGE_PROCESS_START") and not session.config.getoption(
+            "--no-coverage-collection"
+        ):
             collect_code_coverage_from_containers()
-
-        docker_restore_db()
-        docker_exec(Container.DB, "dropdb test_db")
-
-        docker_exec(Container.DB, "dropdb --if-exists cvat")
-        docker_exec(Container.DB, "createdb cvat")
-        docker_exec_cvat("python manage.py migrate")
 
 
 def collect_code_coverage_from_containers():
     for container in Container.covered():
-        process_command = "python3"
+        process_command = "python"
 
         # find process with code coverage
-        pid, _ = docker_exec(container, f"pidof {process_command} -o 1")
+        pid = docker_exec(container, f"pidof {process_command} -o 1")
 
         # stop process with code coverage
         docker_exec(container, f"kill -15 {pid}")

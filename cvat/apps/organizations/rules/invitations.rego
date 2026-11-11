@@ -26,7 +26,7 @@ import data.organizations
 #         "owner": { "id": <num> },
 #         "invitee": { "id": <num> },
 #         "role": <"owner"|"maintainer"|"supervisor"|"worker">,
-#         "organization": { "id": <num> }
+#         "organization": { "id": <num> } or null
 #     } or null,
 # }
 
@@ -34,6 +34,13 @@ default allow := false
 
 allow if {
     utils.is_admin
+}
+
+allow if {
+    input.scope in {utils.DELETE, utils.RESEND, utils.VIEW}
+    input.auth.organization.id == input.resource.organization.id
+    utils.has_perm(utils.USER)
+    organizations.is_staff
 }
 
 allow if {
@@ -46,29 +53,29 @@ allow if {
     organizations.is_member
 }
 
-filter := [] if { # Django Q object to filter list of entries
-    utils.is_sandbox
+base_filter := {} if { # Django Q object to filter list of entries
     utils.is_admin
 } else := qobject if {
     utils.is_sandbox
     user := input.auth.user
-    qobject := [ {"owner": user.id}, {"membership__user": user.id}, "|" ]
-} else := qobject if {
-    utils.is_organization
-    utils.is_admin
-    qobject := [ {"membership__organization": input.auth.organization.id} ]
-} else := qobject if {
+    qobject := ["|",
+        {"owner": user.id},
+        {"membership__user": user.id},
+    ]
+} else := {} if {
     utils.is_organization
     organizations.is_staff
     utils.has_perm(utils.USER)
-    qobject := [ {"membership__organization": input.auth.organization.id} ]
 } else := qobject if {
     utils.is_organization
     user := input.auth.user
-    org_id := input.auth.organization.id
-    qobject := [ {"owner": user.id}, {"membership__user": user.id}, "|",
-        {"membership__organization": org_id}, "&" ]
+    qobject := ["|",
+        {"owner": user.id},
+        {"membership__user": user.id},
+    ]
 }
+
+filter := utils.add_organization_filter(base_filter, ["membership__organization"])
 
 allow if {
     input.scope == utils.CREATE
@@ -105,13 +112,6 @@ allow if {
 allow if {
     input.scope == utils.VIEW
     input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.USER)
-    organizations.is_staff
-}
-
-allow if {
-    input.scope == utils.VIEW
-    input.auth.organization.id == input.resource.organization.id
     utils.is_resource_owner
 }
 
@@ -131,13 +131,6 @@ allow if {
 allow if {
     input.scope == utils.RESEND
     input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.USER)
-    organizations.is_staff
-}
-
-allow if {
-    input.scope == utils.RESEND
-    input.auth.organization.id == input.resource.organization.id
     utils.has_perm(utils.WORKER)
     utils.is_resource_owner
 }
@@ -147,13 +140,6 @@ allow if {
     utils.is_sandbox
     utils.has_perm(utils.WORKER)
     utils.is_resource_owner
-}
-
-allow if {
-    input.scope == utils.DELETE
-    input.auth.organization.id == input.resource.organization.id
-    utils.has_perm(utils.USER)
-    organizations.is_staff
 }
 
 allow if {

@@ -9,6 +9,7 @@ import ObjectItemDetails, { SizeType } from 'components/annotation-page/standard
 import { updateAnnotationsAsync, collapseObjectItems } from 'actions/annotation-actions';
 import { connect } from 'react-redux';
 import { ThunkDispatch } from 'utils/redux';
+import { getObjectStateByClientID } from 'utils/objects-sidebar';
 
 interface OwnProps {
     readonly: boolean;
@@ -20,6 +21,7 @@ interface StateToProps {
     collapsed: boolean;
     state: ObjectState | null;
     workspace: Workspace;
+    textContent: string;
 }
 
 interface DispatchToProps {
@@ -28,18 +30,9 @@ interface DispatchToProps {
 }
 
 function mapStateToProps(state: CombinedState, own: OwnProps): StateToProps {
-    const { clientID, parentID } = own;
-    let objectState: ObjectState | null = null;
+    const { clientID } = own;
     const { states } = state.annotation.annotations;
-    if (parentID) {
-        const parentState = (states as ObjectState[])
-            .find((_objectState: ObjectState) => _objectState.clientID === parentID);
-        if (parentState) {
-            objectState = parentState.elements.find((el: ObjectState) => el.clientID === clientID) || null;
-        }
-    } else {
-        objectState = (states as ObjectState[]).find((el: ObjectState) => el.clientID === clientID) || null;
-    }
+    const objectState = getObjectStateByClientID(states, clientID);
 
     const {
         annotation: {
@@ -49,6 +42,11 @@ function mapStateToProps(state: CombinedState, own: OwnProps): StateToProps {
             },
             workspace,
         },
+        settings: {
+            workspace: {
+                textContent,
+            },
+        },
     } = state;
 
     const collapsed = typeof statesCollapsed[clientID as number] === 'undefined' ? collapsedAll : statesCollapsed[clientID];
@@ -57,6 +55,7 @@ function mapStateToProps(state: CombinedState, own: OwnProps): StateToProps {
         collapsed,
         state: objectState,
         workspace,
+        textContent,
     };
 }
 
@@ -90,13 +89,13 @@ class ObjectItemDetailsContainer extends React.PureComponent<Props> {
             if (state.shapeType === ShapeType.CUBOID && state.points) {
                 const points = state.points.slice();
                 switch (type) {
-                    case SizeType.WIDTH:
+                    case SizeType.LENGTH:
                         points[6] = value;
                         break;
-                    case SizeType.HEIGHT:
+                    case SizeType.WIDTH:
                         points[7] = value;
                         break;
-                    case SizeType.LENGTH:
+                    case SizeType.HEIGHT:
                         points[8] = value;
                         break;
                     default:
@@ -115,7 +114,7 @@ class ObjectItemDetailsContainer extends React.PureComponent<Props> {
 
     public render(): JSX.Element | null {
         const {
-            readonly, collapsed, state, workspace,
+            readonly, collapsed, state, workspace, textContent,
         } = this.props;
 
         if (state) {
@@ -123,9 +122,9 @@ class ObjectItemDetailsContainer extends React.PureComponent<Props> {
 
             if (state.shapeType === ShapeType.CUBOID && workspace === Workspace.STANDARD3D && state.points) {
                 sizeParams = {
-                    width: parseFloat(state.points[6].toFixed(2)), // X
-                    height: parseFloat(state.points[7].toFixed(2)), // Y
-                    length: parseFloat(state.points[8].toFixed(2)), // Z
+                    length: parseFloat(state.points[6].toFixed(2)), // X
+                    width: parseFloat(state.points[7].toFixed(2)), // Y
+                    height: parseFloat(state.points[8].toFixed(2)), // Z
                 };
             }
             return (
@@ -138,6 +137,10 @@ class ObjectItemDetailsContainer extends React.PureComponent<Props> {
                     attributes={[...state.label.attributes]}
                     changeSize={this.changeSize}
                     sizeParams={sizeParams}
+                    source={state.source}
+                    score={state.score}
+                    votes={state.votes}
+                    textContent={textContent}
                 />
             );
         }

@@ -10,7 +10,13 @@ import pytest
 from cvat_sdk.api_client.api_client import ApiClient, Endpoint
 from deepdiff import DeepDiff
 
-from shared.utils.config import delete_method, get_method, patch_method, post_method
+from shared.utils.config import (
+    delete_method,
+    get_method,
+    get_paginated_collection,
+    patch_method,
+    post_method,
+)
 
 from .utils import CollectionSimpleFilterTestBase
 
@@ -25,7 +31,7 @@ class TestPostWebhooks:
         "is_active": True,
         "project_id": 1,
         "secret": "secret",
-        "target_url": "http://example.com",
+        "target_url": "http://webhooks.internal",
         "type": "project",
     }
 
@@ -36,12 +42,23 @@ class TestPostWebhooks:
         "events": ["create:task", "delete:task"],
         "is_active": True,
         "secret": "secret",
-        "target_url": "http://example.com",
+        "target_url": "http://webhooks.internal",
         "type": "organization",
     }
 
+    server_webhook = {
+        "description": "webhook description",
+        "content_type": "application/json",
+        "enable_ssl": False,
+        "events": ["create:user"],
+        "is_active": True,
+        "secret": "secret",
+        "target_url": "http://webhooks.internal",
+        "type": "server",
+    }
+
     def test_sandbox_admin_can_create_webhook_for_project(self, projects, users):
-        admin = next((u for u in users if "admin" in u["groups"]))
+        admin = next(u for u in users if "admin" in u["groups"])
         project = [
             p for p in projects if p["owner"]["id"] != admin["id"] and p["organization"] is None
         ][0]
@@ -57,12 +74,10 @@ class TestPostWebhooks:
     def test_admin_can_create_webhook_for_org(self, users, organizations, is_org_member):
         admins = [u for u in users if "admin" in u["groups"]]
         username, org_id = next(
-            (
-                (user["username"], org["id"])
-                for user in admins
-                for org in organizations
-                if not is_org_member(user["id"], org["id"])
-            )
+            (user["username"], org["id"])
+            for user in admins
+            for org in organizations
+            if not is_org_member(user["id"], org["id"])
         )
 
         webhook = deepcopy(self.org_webhook)
@@ -100,12 +115,10 @@ class TestPostWebhooks:
     def test_sandbox_project_owner_can_create_webhook_for_project(self, privilege, projects, users):
         users = [user for user in users if privilege in user["groups"]]
         username, project_id = next(
-            (
-                (user["username"], project["id"])
-                for user in users
-                for project in projects
-                if project["owner"]["id"] == user["id"] and project["organization"] is None
-            )
+            (user["username"], project["id"])
+            for user in users
+            for project in projects
+            if project["owner"]["id"] == user["id"] and project["organization"] is None
         )
 
         webhook = deepcopy(self.proj_webhook)
@@ -123,12 +136,10 @@ class TestPostWebhooks:
         users = [u for u in users if privilege in u["groups"]]
         projects = [p for p in projects if p["assignee"] is not None]
         username, project_id = next(
-            (
-                (user["username"], project["id"])
-                for user in users
-                for project in projects
-                if project["assignee"]["id"] == user["id"] and project["organization"] is None
-            )
+            (user["username"], project["id"])
+            for user in users
+            for project in projects
+            if project["assignee"]["id"] == user["id"] and project["organization"] is None
         )
 
         webhook = deepcopy(self.proj_webhook)
@@ -141,11 +152,9 @@ class TestPostWebhooks:
     @pytest.mark.parametrize("role", ["maintainer", "owner"])
     def test_member_can_create_webhook_for_org(self, role, find_users, organizations):
         username, org_id = next(
-            (
-                (u["username"], o["id"])
-                for o in organizations
-                for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
-            )
+            (u["username"], o["id"])
+            for o in organizations
+            for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
         )
 
         webhook = deepcopy(self.org_webhook)
@@ -160,13 +169,11 @@ class TestPostWebhooks:
         self, role, find_users, organizations, projects_by_org, is_project_staff
     ):
         username, oid, pid = next(
-            (
-                (u["username"], o["id"], p["id"])
-                for o in organizations
-                for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
-                for p in projects_by_org.get(o["id"], [])
-                if not is_project_staff(u["id"], p["id"])
-            )
+            (u["username"], o["id"], p["id"])
+            for o in organizations
+            for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
+            for p in projects_by_org.get(o["id"], [])
+            if not is_project_staff(u["id"], p["id"])
         )
 
         webhook = deepcopy(self.proj_webhook)
@@ -180,11 +187,9 @@ class TestPostWebhooks:
     @pytest.mark.parametrize("role", ["supervisor", "worker"])
     def test_member_cannot_create_webhook_for_org(self, role, find_users, organizations):
         username, org_id = next(
-            (
-                (u["username"], o["id"])
-                for o in organizations
-                for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
-            )
+            (u["username"], o["id"])
+            for o in organizations
+            for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
         )
 
         webhook = deepcopy(self.org_webhook)
@@ -198,13 +203,11 @@ class TestPostWebhooks:
         self, role, find_users, organizations, projects_by_org, is_project_staff
     ):
         username, oid, pid = next(
-            (
-                (u["username"], o["id"], p["id"])
-                for o in organizations
-                for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
-                for p in projects_by_org.get(o["id"], [])
-                if not is_project_staff(u["id"], p["id"])
-            )
+            (u["username"], o["id"], p["id"])
+            for o in organizations
+            for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
+            for p in projects_by_org.get(o["id"], [])
+            if not is_project_staff(u["id"], p["id"])
         )
 
         webhook = deepcopy(self.proj_webhook)
@@ -219,13 +222,11 @@ class TestPostWebhooks:
         self, role, find_users, organizations, projects_by_org, is_project_staff
     ):
         username, oid, pid = next(
-            (
-                (u["username"], o["id"], p["id"])
-                for o in organizations
-                for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
-                for p in projects_by_org.get(o["id"], [])
-                if p["owner"]["id"] == u["id"]
-            )
+            (u["username"], o["id"], p["id"])
+            for o in organizations
+            for u in find_users(org=o["id"], role=role, exclude_privilege="admin")
+            for p in projects_by_org.get(o["id"], [])
+            if p["owner"]["id"] == u["id"]
         )
 
         webhook = deepcopy(self.proj_webhook)
@@ -240,12 +241,10 @@ class TestPostWebhooks:
         self, find_users, organizations, is_org_member
     ):
         username, org_id = next(
-            (
-                (u["username"], o["id"])
-                for o in organizations
-                for u in find_users(exclude_privilege="admin")
-                if not is_org_member(u["id"], o["id"])
-            )
+            (u["username"], o["id"])
+            for o in organizations
+            for u in find_users(exclude_privilege="admin")
+            if not is_org_member(u["id"], o["id"])
         )
 
         webhook = deepcopy(self.org_webhook)
@@ -388,20 +387,37 @@ class TestPostWebhooks:
 
         assert response.status_code == HTTPStatus.BAD_REQUEST
 
+    def test_admin_can_create_server_webhook(self, users):
+        admin = next(u for u in users if "admin" in u["groups"])
+
+        webhook = deepcopy(self.server_webhook)
+
+        response = post_method(admin["username"], "webhooks", webhook)
+
+        assert response.status_code == HTTPStatus.CREATED
+        assert "secret" not in response.json()
+
+    def test_non_admin_cannot_create_server_webhook(self, find_users):
+        username = next(u["username"] for u in find_users(exclude_privilege="admin"))
+
+        webhook = deepcopy(self.server_webhook)
+
+        response = post_method(username, "webhooks", webhook)
+
+        assert response.status_code == HTTPStatus.FORBIDDEN
+
 
 @pytest.mark.usefixtures("restore_db_per_class")
 class TestGetWebhooks:
     def test_admin_can_get_webhook(self, webhooks, users, projects):
         proj_webhooks = [w for w in webhooks if w["type"] == "project"]
         username, wid = next(
-            (
-                (user["username"], webhook["id"])
-                for user in users
-                for webhook in proj_webhooks
-                if "admin" in user["groups"]
-                and webhook["owner"]["id"] != user["id"]
-                and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
-            )
+            (user["username"], webhook["id"])
+            for user in users
+            for webhook in proj_webhooks
+            if "admin" in user["groups"]
+            and webhook["owner"]["id"] != user["id"]
+            and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
         )
 
         response = get_method(username, f"webhooks/{wid}")
@@ -414,13 +430,11 @@ class TestGetWebhooks:
     def test_project_owner_can_get_webhook(self, privilege, webhooks, projects, users):
         proj_webhooks = [w for w in webhooks if w["type"] == "project"]
         username, wid = next(
-            (
-                (user["username"], webhook["id"])
-                for user in users
-                for webhook in proj_webhooks
-                if privilege in user["groups"]
-                and projects[webhook["project_id"]]["owner"]["id"] == user["id"]
-            )
+            (user["username"], webhook["id"])
+            for user in users
+            for webhook in proj_webhooks
+            if privilege in user["groups"]
+            and projects[webhook["project_id"]]["owner"]["id"] == user["id"]
         )
 
         response = get_method(username, f"webhooks/{wid}")
@@ -433,12 +447,10 @@ class TestGetWebhooks:
     def test_webhook_owner_can_get_webhook(self, privilege, webhooks, projects, users):
         proj_webhooks = [w for w in webhooks if w["type"] == "project"]
         username, wid = next(
-            (
-                (user["username"], webhook["id"])
-                for user in users
-                for webhook in proj_webhooks
-                if privilege in user["groups"] and webhook["owner"]["id"] == user["id"]
-            )
+            (user["username"], webhook["id"])
+            for user in users
+            for webhook in proj_webhooks
+            if privilege in user["groups"] and webhook["owner"]["id"] == user["id"]
         )
 
         response = get_method(username, f"webhooks/{wid}")
@@ -451,14 +463,12 @@ class TestGetWebhooks:
     def test_not_project_staff_cannot_get_webhook(self, privilege, webhooks, projects, users):
         proj_webhooks = [w for w in webhooks if w["type"] == "project"]
         username, wid = next(
-            (
-                (user["username"], webhook["id"])
-                for user in users
-                for webhook in proj_webhooks
-                if privilege in user["groups"]
-                and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
-                and webhook["owner"]["id"] != user["id"]
-            )
+            (user["username"], webhook["id"])
+            for user in users
+            for webhook in proj_webhooks
+            if privilege in user["groups"]
+            and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
+            and webhook["owner"]["id"] != user["id"]
         )
 
         response = get_method(username, f"webhooks/{wid}")
@@ -467,8 +477,8 @@ class TestGetWebhooks:
 
     @pytest.mark.parametrize("role", ["owner", "maintainer"])
     def test_org_staff_can_see_org_webhook(self, role, webhooks, find_users):
-        webhook = next((w for w in webhooks if w["type"] == "organization"))
-        username = next((u["username"] for u in find_users(role=role, org=webhook["organization"])))
+        webhook = next(w for w in webhooks if w["type"] == "organization")
+        username = next(u["username"] for u in find_users(role=role, org=webhook["organization"]))
 
         response = get_method(username, f"webhooks/{webhook['id']}", org_id=webhook["organization"])
 
@@ -482,13 +492,11 @@ class TestGetWebhooks:
             w for w in webhooks if w["organization"] is not None and w["type"] == "project"
         ]
         username, webhook = next(
-            (
-                (user["username"], webhook)
-                for webhook in proj_webhooks
-                for user in find_users(role=role, org=webhook["organization"])
-                if projects[webhook["project_id"]]["owner"]["id"] != user["id"]
-                and webhook["owner"]["id"] != user["id"]
-            )
+            (user["username"], webhook)
+            for webhook in proj_webhooks
+            for user in find_users(role=role, org=webhook["organization"])
+            if projects[webhook["project_id"]]["owner"]["id"] != user["id"]
+            and webhook["owner"]["id"] != user["id"]
         )
 
         response = get_method(username, f"webhooks/{webhook['id']}", org_id=webhook["organization"])
@@ -499,8 +507,8 @@ class TestGetWebhooks:
 
     @pytest.mark.parametrize("role", ["worker", "supervisor"])
     def test_member_cannot_get_org_webhook(self, role, webhooks, find_users):
-        webhook = next((w for w in webhooks if w["type"] == "organization"))
-        username = next((u["username"] for u in find_users(role=role, org=webhook["organization"])))
+        webhook = next(w for w in webhooks if w["type"] == "organization")
+        username = next(u["username"] for u in find_users(role=role, org=webhook["organization"]))
 
         response = get_method(username, f"webhooks/{webhook['id']}", org_id=webhook["organization"])
 
@@ -512,13 +520,11 @@ class TestGetWebhooks:
             w for w in webhooks if w["organization"] is not None and w["type"] == "project"
         ]
         username, webhook = next(
-            (
-                (user["username"], webhook)
-                for webhook in proj_webhooks
-                for user in find_users(role=role, org=webhook["organization"])
-                if projects[webhook["project_id"]]["owner"]["id"] != user["id"]
-                and webhook["owner"]["id"] != user["id"]
-            )
+            (user["username"], webhook)
+            for webhook in proj_webhooks
+            for user in find_users(role=role, org=webhook["organization"])
+            if projects[webhook["project_id"]]["owner"]["id"] != user["id"]
+            and webhook["owner"]["id"] != user["id"]
         )
 
         response = get_method(username, f"webhooks/{webhook['id']}", org_id=webhook["organization"])
@@ -531,13 +537,11 @@ class TestGetWebhooks:
             w for w in webhooks if w["organization"] is not None and w["type"] == "project"
         ]
         username, webhook = next(
-            (
-                (user["username"], webhook)
-                for webhook in proj_webhooks
-                for user in find_users(role=role, org=webhook["organization"])
-                if projects[webhook["project_id"]]["owner"]["id"] == user["id"]
-                or webhook["owner"]["id"] == user["id"]
-            )
+            (user["username"], webhook)
+            for webhook in proj_webhooks
+            for user in find_users(role=role, org=webhook["organization"])
+            if projects[webhook["project_id"]]["owner"]["id"] == user["id"]
+            or webhook["owner"]["id"] == user["id"]
         )
 
         response = get_method(username, f"webhooks/{webhook['id']}", org_id=webhook["organization"])
@@ -545,6 +549,24 @@ class TestGetWebhooks:
         assert response.status_code == HTTPStatus.OK
         assert "secret" not in response.json()
         assert DeepDiff(webhook, response.json(), ignore_order=True) == {}
+
+    def test_admin_can_get_server_webhook(self, webhooks, find_users):
+        webhook = next(w for w in webhooks if w["type"] == "server")
+        username = next(u["username"] for u in find_users(privilege="admin"))
+
+        response = get_method(username, f"webhooks/{webhook['id']}")
+
+        assert response.status_code == HTTPStatus.OK
+        assert "secret" not in response.json()
+        assert DeepDiff(webhook, response.json(), ignore_order=True) == {}
+
+    def test_non_admin_cannot_get_server_webhook(self, webhooks, find_users):
+        webhook = next(w for w in webhooks if w["type"] == "server")
+        username = next(u["username"] for u in find_users(exclude_privilege="admin"))
+
+        response = get_method(username, f"webhooks/{webhook['id']}")
+
+        assert response.status_code == HTTPStatus.FORBIDDEN
 
 
 class TestWebhooksListFilters(CollectionSimpleFilterTestBase):
@@ -571,19 +593,16 @@ class TestWebhooksListFilters(CollectionSimpleFilterTestBase):
 @pytest.mark.usefixtures("restore_db_per_class")
 class TestGetListWebhooks:
     def test_can_get_webhooks_list(self, webhooks):
-        response = get_method("admin2", "webhooks")
+        results = get_paginated_collection("admin2", "webhooks")
 
-        assert response.status_code == HTTPStatus.OK
-        assert all(["secret" not in webhook for webhook in response.json()["results"]])
-        assert DeepDiff(webhooks.raw, response.json()["results"], ignore_order=True) == {}
+        assert all(["secret" not in webhook for webhook in results])
+        assert DeepDiff(webhooks.raw, results, ignore_order=True) == {}
 
     def test_admin_can_get_webhooks_for_project(self, webhooks):
         pid = next(
-            (
-                webhook["project_id"]
-                for webhook in webhooks
-                if webhook["type"] == "project" and webhook["organization"] is None
-            )
+            webhook["project_id"]
+            for webhook in webhooks
+            if webhook["type"] == "project" and webhook["organization"] is None
         )
 
         expected_response = [
@@ -600,7 +619,7 @@ class TestGetListWebhooks:
 
     def test_admin_can_get_webhooks_for_organization(self, webhooks):
         org_id = next(
-            (webhook["organization"] for webhook in webhooks if webhook["organization"] is not None)
+            webhook["organization"] for webhook in webhooks if webhook["organization"] is not None
         )
 
         expected_response = [webhook for webhook in webhooks if webhook["organization"] == org_id]
@@ -612,11 +631,9 @@ class TestGetListWebhooks:
 
     def test_admin_can_get_webhooks_for_project_in_org(self, webhooks):
         pid, oid = next(
-            (
-                (webhook["project_id"], webhook["organization"])
-                for webhook in webhooks
-                if webhook["type"] == "project" and webhook["organization"] is not None
-            )
+            (webhook["project_id"], webhook["organization"])
+            for webhook in webhooks
+            if webhook["type"] == "project" and webhook["organization"] is not None
         )
 
         expected_response = [
@@ -636,15 +653,13 @@ class TestGetListWebhooks:
         self, privilege, find_users, webhooks, projects
     ):
         username, pid = next(
-            (
-                (user["username"], webhook["project_id"])
-                for user in find_users(privilege=privilege)
-                for webhook in webhooks
-                if webhook["type"] == "project"
-                and webhook["organization"] is None
-                and webhook["owner"]["id"] != user["id"]
-                and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
-            )
+            (user["username"], webhook["project_id"])
+            for user in find_users(privilege=privilege)
+            for webhook in webhooks
+            if webhook["type"] == "project"
+            and webhook["organization"] is None
+            and webhook["owner"]["id"] != user["id"]
+            and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
         )
 
         filter_val = '{"and":[{"==":[{"var":"project_id"},%s]}]}' % pid
@@ -657,14 +672,12 @@ class TestGetListWebhooks:
     @pytest.mark.parametrize("privilege", ["user"])
     def test_user_can_get_webhook_list_for_project(self, privilege, find_users, webhooks, projects):
         username, pid = next(
-            (
-                (user["username"], webhook["project_id"])
-                for user in find_users(privilege=privilege)
-                for webhook in webhooks
-                if webhook["type"] == "project"
-                and webhook["organization"] is None
-                and projects[webhook["project_id"]]["owner"]["id"] == user["id"]
-            )
+            (user["username"], webhook["project_id"])
+            for user in find_users(privilege=privilege)
+            for webhook in webhooks
+            if webhook["type"] == "project"
+            and webhook["organization"] is None
+            and projects[webhook["project_id"]]["owner"]["id"] == user["id"]
         )
 
         expected_response = [
@@ -679,14 +692,12 @@ class TestGetListWebhooks:
 
     def test_non_member_cannot_see_webhook_list_for_org(self, webhooks, users, is_org_member):
         username, org_id = next(
-            (
-                (user["username"], webhook["organization"])
-                for webhook in webhooks
-                for user in users
-                if webhook["organization"] is not None
-                and not is_org_member(user["id"], webhook["organization"])
-                and "admin" not in user["groups"]
-            )
+            (user["username"], webhook["organization"])
+            for webhook in webhooks
+            for user in users
+            if webhook["organization"] is not None
+            and not is_org_member(user["id"], webhook["organization"])
+            and "admin" not in user["groups"]
         )
 
         response = get_method(username, "webhooks", org_id=org_id)
@@ -696,13 +707,11 @@ class TestGetListWebhooks:
     @pytest.mark.parametrize("role", ["maintainer", "owner"])
     def test_org_staff_can_see_all_org_webhooks(self, role, webhooks, organizations, find_users):
         username, org_id = next(
-            (
-                (user["username"], org["id"])
-                for webhook in webhooks
-                for org in organizations
-                for user in find_users(role=role, org=org["id"])
-                if webhook["organization"] == org["id"]
-            )
+            (user["username"], org["id"])
+            for webhook in webhooks
+            for org in organizations
+            for user in find_users(role=role, org=org["id"])
+            if webhook["organization"] == org["id"]
         )
 
         expected_response = [webhook for webhook in webhooks if webhook["organization"] == org_id]
@@ -717,13 +726,11 @@ class TestGetListWebhooks:
         self, role, webhooks, organizations, find_users, projects
     ):
         username, org_id = next(
-            (
-                (user["username"], org["id"])
-                for webhook in webhooks
-                for org in organizations
-                for user in find_users(role=role, org=org["id"])
-                if webhook["organization"] == org["id"]
-            )
+            (user["username"], org["id"])
+            for webhook in webhooks
+            for org in organizations
+            for user in find_users(role=role, org=org["id"])
+            if webhook["organization"] == org["id"]
         )
 
         expected_response = [
@@ -749,15 +756,13 @@ class TestGetListWebhooks:
         self, role, webhooks, organizations, find_users, projects
     ):
         username, org_id = next(
-            (
-                (user["username"], org["id"])
-                for webhook in webhooks
-                for org in organizations
-                for user in find_users(role=role, org=org["id"])
-                if webhook["organization"] == org["id"]
-                and webhook["type"] == "project"
-                and projects[webhook["project_id"]]["owner"]["id"] == user["id"]
-            )
+            (user["username"], org["id"])
+            for webhook in webhooks
+            for org in organizations
+            for user in find_users(role=role, org=org["id"])
+            if webhook["organization"] == org["id"]
+            and webhook["type"] == "project"
+            and projects[webhook["project_id"]]["owner"]["id"] == user["id"]
         )
 
         expected_response = [
@@ -781,6 +786,24 @@ class TestGetListWebhooks:
         assert response.status_code == HTTPStatus.OK
         assert DeepDiff(list(webhooks), response.json()["results"], ignore_order=True) == {}
 
+    def test_admin_can_see_server_webhook_in_list(self, webhooks, find_users):
+        webhook = next(w for w in webhooks if w["type"] == "server")
+        username = next(u["username"] for u in find_users(privilege="admin"))
+
+        response = get_method(username, "webhooks")
+
+        assert response.status_code == HTTPStatus.OK
+        assert webhook["id"] in {w["id"] for w in response.json()["results"]}
+
+    def test_non_admin_cannot_see_server_webhook_in_list(self, webhooks, find_users):
+        webhook = next(w for w in webhooks if w["type"] == "server")
+        username = next(u["username"] for u in find_users(exclude_privilege="admin"))
+
+        response = get_method(username, "webhooks")
+
+        assert response.status_code == HTTPStatus.OK
+        assert webhook["id"] not in {w["id"] for w in response.json()["results"]}
+
 
 @pytest.mark.usefixtures("restore_db_per_function")
 class TestPatchWebhooks:
@@ -788,12 +811,12 @@ class TestPatchWebhooks:
 
     def test_sandbox_admin_can_update_any_webhook(self, webhooks, find_users):
         username, webhook = next(
-            (
-                (user["username"], deepcopy(webhook))
-                for user in find_users(privilege="admin")
-                for webhook in webhooks
-                if webhook["owner"]["id"] != user["id"] and webhook["organization"] is None
-            )
+            (user["username"], deepcopy(webhook))
+            for user in find_users(privilege="admin")
+            for webhook in webhooks
+            if webhook["owner"]["id"] != user["id"]
+            and webhook["organization"] is None
+            and webhook["type"] == "project"
         )
         patch_data = {
             "target_url": "http://newexample.com",
@@ -827,12 +850,10 @@ class TestPatchWebhooks:
     @pytest.mark.parametrize("privilege", ["user"])
     def test_sandbox_user_can_update_webhook(self, privilege, find_users, webhooks):
         username, webhook = next(
-            (
-                (user["username"], deepcopy(webhook))
-                for user in find_users(privilege=privilege)
-                for webhook in webhooks
-                if webhook["owner"]["id"] == user["id"]
-            )
+            (user["username"], deepcopy(webhook))
+            for user in find_users(privilege=privilege)
+            for webhook in webhooks
+            if webhook["owner"]["id"] == user["id"]
         )
 
         patch_data = {"target_url": "http://newexample.com"}
@@ -855,12 +876,10 @@ class TestPatchWebhooks:
     @pytest.mark.parametrize("privilege", ["worker", "user"])
     def test_sandbox_user_cannot_update_webhook(self, privilege, find_users, webhooks):
         username, webhook = next(
-            (
-                (user["username"], deepcopy(webhook))
-                for user in find_users(privilege=privilege)
-                for webhook in webhooks
-                if webhook["owner"]["id"] != user["id"]
-            )
+            (user["username"], deepcopy(webhook))
+            for user in find_users(privilege=privilege)
+            for webhook in webhooks
+            if webhook["owner"]["id"] != user["id"]
         )
 
         patch_data = {"target_url": "http://newexample.com"}
@@ -873,13 +892,11 @@ class TestPatchWebhooks:
     def test_admin_can_update_org_webhook(self, find_users, organizations, webhooks, is_org_member):
         org_webhooks = [w for w in webhooks if w["type"] == "organization"]
         admin, oid, webhook = next(
-            (
-                (u["username"], o["id"], deepcopy(w))
-                for u in find_users(privilege="admin")
-                for o in organizations
-                for w in org_webhooks
-                if w["organization"] == o["id"] and not is_org_member(u["id"], o["id"])
-            )
+            (u["username"], o["id"], deepcopy(w))
+            for u in find_users(privilege="admin")
+            for o in organizations
+            for w in org_webhooks
+            if w["organization"] == o["id"] and not is_org_member(u["id"], o["id"])
         )
 
         patch_data = {"target_url": "http://newexample.com"}
@@ -903,13 +920,11 @@ class TestPatchWebhooks:
     def test_member_can_update_org_webhook(self, role, find_users, organizations, webhooks):
         org_webhooks = [w for w in webhooks if w["type"] == "organization"]
         username, oid, webhook = next(
-            (
-                (u["username"], o["id"], deepcopy(w))
-                for o in organizations
-                for u in find_users(role=role, org=o["id"])
-                for w in org_webhooks
-                if w["organization"] == o["id"]
-            )
+            (u["username"], o["id"], deepcopy(w))
+            for o in organizations
+            for u in find_users(role=role, org=o["id"])
+            for w in org_webhooks
+            if w["organization"] == o["id"]
         )
 
         patch_data = {"target_url": "http://newexample.com"}
@@ -933,13 +948,11 @@ class TestPatchWebhooks:
     def test_member_cannot_update_org_webhook(self, role, find_users, organizations, webhooks):
         org_webhooks = [w for w in webhooks if w["type"] == "organization"]
         username, oid, webhook = next(
-            (
-                (u["username"], o["id"], deepcopy(w))
-                for o in organizations
-                for u in find_users(role=role, org=o["id"])
-                for w in org_webhooks
-                if w["organization"] == o["id"]
-            )
+            (u["username"], o["id"], deepcopy(w))
+            for o in organizations
+            for u in find_users(role=role, org=o["id"])
+            for w in org_webhooks
+            if w["organization"] == o["id"]
         )
 
         patch_data = {"target_url": "http://newexample.com"}
@@ -958,17 +971,15 @@ class TestPatchWebhooks:
     ):
         proj_webhooks = [w for w in webhooks if w["type"] == "project"]
         username, org_id, webhook = next(
-            (
-                (u["username"], o["id"], deepcopy(w))
-                for o in organizations
-                for u in find_users(role=role, org=o["id"])
-                for w in proj_webhooks
-                for p in projects_by_org.get(o["id"], [])
-                if w["project_id"] == p["id"]
-                and w["organization"] == o["id"]
-                and not is_project_staff(u["id"], p["id"])
-                and w["owner"]["id"] != u["id"]
-            )
+            (u["username"], o["id"], deepcopy(w))
+            for o in organizations
+            for u in find_users(role=role, org=o["id"])
+            for w in proj_webhooks
+            for p in projects_by_org.get(o["id"], [])
+            if w["project_id"] == p["id"]
+            and w["organization"] == o["id"]
+            and not is_project_staff(u["id"], p["id"])
+            and w["owner"]["id"] != u["id"]
         )
 
         patch_data = {"target_url": "http://newexample.com"}
@@ -997,16 +1008,14 @@ class TestPatchWebhooks:
     ):
         proj_webhooks = [w for w in webhooks if w["type"] == "project"]
         username, org_id, webhook = next(
-            (
-                (u["username"], o["id"], deepcopy(w))
-                for o in organizations
-                for u in find_users(role=role, org=o["id"])
-                for w in proj_webhooks
-                for p in projects_by_org.get(o["id"], [])
-                if w["project_id"] == p["id"]
-                and w["organization"] == o["id"]
-                and u["id"] == p["owner"]["id"]
-            )
+            (u["username"], o["id"], deepcopy(w))
+            for o in organizations
+            for u in find_users(role=role, org=o["id"])
+            for w in proj_webhooks
+            for p in projects_by_org.get(o["id"], [])
+            if w["project_id"] == p["id"]
+            and w["organization"] == o["id"]
+            and u["id"] == p["owner"]["id"]
         )
 
         patch_data = {"target_url": "http://newexample.com"}
@@ -1026,6 +1035,44 @@ class TestPatchWebhooks:
             == {}
         )
 
+    def test_admin_can_update_server_webhook(self, webhooks, find_users):
+        username, webhook = next(
+            (user["username"], deepcopy(webhook))
+            for user in find_users(privilege="admin")
+            for webhook in webhooks
+            if webhook["type"] == "server" and webhook["owner"]["id"] != user["id"]
+        )
+
+        patch_data = {"target_url": "http://newexample.com"}
+        webhook.update(patch_data)
+
+        response = patch_method(username, f"webhooks/{webhook['id']}", patch_data)
+
+        assert response.status_code == HTTPStatus.OK
+        assert (
+            DeepDiff(
+                webhook,
+                response.json(),
+                ignore_order=True,
+                exclude_paths=["root['updated_date']", "root['secret']"],
+            )
+            == {}
+        )
+
+    def test_non_admin_cannot_update_server_webhook(self, webhooks, find_users):
+        username, webhook = next(
+            (user["username"], deepcopy(webhook))
+            for user in find_users(exclude_privilege="admin")
+            for webhook in webhooks
+            if webhook["type"] == "server"
+        )
+
+        patch_data = {"target_url": "http://newexample.com"}
+
+        response = patch_method(username, f"webhooks/{webhook['id']}", patch_data)
+
+        assert response.status_code == HTTPStatus.FORBIDDEN
+
 
 @pytest.mark.usefixtures("restore_db_per_function")
 class TestDeleteWebhooks:
@@ -1035,15 +1082,13 @@ class TestDeleteWebhooks:
     ):
         users = find_users(privilege=privilege)
         username, webhook_id = next(
-            (
-                (user["username"], webhook["id"])
-                for webhook in webhooks
-                for user in users
-                if webhook["type"] == "project"
-                and webhook["organization"] is None
-                and webhook["owner"]["id"] != user["id"]
-                and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
-            )
+            (user["username"], webhook["id"])
+            for webhook in webhooks
+            for user in users
+            if webhook["type"] == "project"
+            and webhook["organization"] is None
+            and webhook["owner"]["id"] != user["id"]
+            and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
         )
 
         if not allow:
@@ -1061,16 +1106,14 @@ class TestDeleteWebhooks:
     ):
         admins = find_users(privilege="admin")
         username, webhook_id = next(
-            (
-                (user["username"], webhook["id"])
-                for user in admins
-                for webhook in webhooks
-                if webhook["type"] == "project"
-                and webhook["organization"] is not None
-                and webhook["owner"]["id"] != user["id"]
-                and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
-                and not is_org_member(user["id"], webhook["organization"])
-            )
+            (user["username"], webhook["id"])
+            for user in admins
+            for webhook in webhooks
+            if webhook["type"] == "project"
+            and webhook["organization"] is not None
+            and webhook["owner"]["id"] != user["id"]
+            and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
+            and not is_org_member(user["id"], webhook["organization"])
         )
 
         response = delete_method(username, f"webhooks/{webhook_id}")
@@ -1082,15 +1125,13 @@ class TestDeleteWebhooks:
     def test_admin_can_delete_org_webhook(self, find_users, webhooks, is_org_member):
         admins = find_users(privilege="admin")
         username, webhook_id = next(
-            (
-                (user["username"], webhook["id"])
-                for user in admins
-                for webhook in webhooks
-                if webhook["type"] == "organization"
-                and webhook["organization"] is not None
-                and webhook["owner"]["id"] != user["id"]
-                and not is_org_member(user["id"], webhook["organization"])
-            )
+            (user["username"], webhook["id"])
+            for user in admins
+            for webhook in webhooks
+            if webhook["type"] == "organization"
+            and webhook["organization"] is not None
+            and webhook["owner"]["id"] != user["id"]
+            and not is_org_member(user["id"], webhook["organization"])
         )
 
         response = delete_method(username, f"webhooks/{webhook_id}")
@@ -1105,14 +1146,12 @@ class TestDeleteWebhooks:
     ):
         users = find_users(privilege=privilege)
         username, webhook_id = next(
-            (
-                (user["username"], webhook["id"])
-                for user in users
-                for webhook in webhooks
-                if webhook["type"] == "project"
-                and webhook["organization"] is None
-                and projects[webhook["project_id"]]["owner"]["id"] == user["id"]
-            )
+            (user["username"], webhook["id"])
+            for user in users
+            for webhook in webhooks
+            if webhook["type"] == "project"
+            and webhook["organization"] is None
+            and projects[webhook["project_id"]]["owner"]["id"] == user["id"]
         )
 
         response = delete_method(username, f"webhooks/{webhook_id}")
@@ -1127,14 +1166,12 @@ class TestDeleteWebhooks:
     ):
         users = find_users(privilege=privilege)
         username, webhook_id = next(
-            (
-                (user["username"], webhook["id"])
-                for user in users
-                for webhook in webhooks
-                if webhook["type"] == "project"
-                and webhook["organization"] is None
-                and webhook["owner"]["id"] == user["id"]
-            )
+            (user["username"], webhook["id"])
+            for user in users
+            for webhook in webhooks
+            if webhook["type"] == "project"
+            and webhook["organization"] is None
+            and webhook["owner"]["id"] == user["id"]
         )
 
         response = delete_method(username, f"webhooks/{webhook_id}")
@@ -1150,13 +1187,11 @@ class TestDeleteWebhooks:
     def test_member_can_delete_org_webhook(self, role, allow, find_users, organizations, webhooks):
         org_webhooks = [w for w in webhooks if w["type"] == "organization"]
         username, org_id, webhook_id = next(
-            (
-                (user["username"], org["id"], webhook["id"])
-                for org in organizations
-                for webhook in org_webhooks
-                for user in find_users(role=role, org=org["id"])
-                if webhook["organization"] == org["id"]
-            )
+            (user["username"], org["id"], webhook["id"])
+            for org in organizations
+            for webhook in org_webhooks
+            for user in find_users(role=role, org=org["id"])
+            if webhook["organization"] == org["id"]
         )
 
         if not allow:
@@ -1178,16 +1213,14 @@ class TestDeleteWebhooks:
     ):
         proj_webhooks = [w for w in webhooks if w["type"] == "project"]
         username, org_id, webhook_id = next(
-            (
-                (user["username"], webhook["organization"], webhook["id"])
-                for org in organizations
-                for user in find_users(role=role, org=org["id"])
-                for webhook in proj_webhooks
-                if webhook["organization"]
-                and webhook["organization"] == org["id"]
-                and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
-                and webhook["owner"]["id"] != user["id"]
-            )
+            (user["username"], webhook["organization"], webhook["id"])
+            for org in organizations
+            for user in find_users(role=role, org=org["id"])
+            for webhook in proj_webhooks
+            if webhook["organization"]
+            and webhook["organization"] == org["id"]
+            and projects[webhook["project_id"]]["owner"]["id"] != user["id"]
+            and webhook["owner"]["id"] != user["id"]
         )
 
         if not allow:
@@ -1206,17 +1239,15 @@ class TestDeleteWebhooks:
     ):
         proj_webhooks = [w for w in webhooks if w["type"] == "project"]
         username, org_id, webhook_id = next(
-            (
-                (user["username"], webhook["organization"], webhook["id"])
-                for org in organizations
-                for user in find_users(role=role, org=org["id"])
-                for webhook in proj_webhooks
-                if webhook["organization"]
-                and webhook["organization"] == org["id"]
-                and (
-                    projects[webhook["project_id"]]["owner"]["id"] == user["id"]
-                    or webhook["owner"]["id"] == user["id"]
-                )
+            (user["username"], webhook["organization"], webhook["id"])
+            for org in organizations
+            for user in find_users(role=role, org=org["id"])
+            for webhook in proj_webhooks
+            if webhook["organization"]
+            and webhook["organization"] == org["id"]
+            and (
+                projects[webhook["project_id"]]["owner"]["id"] == user["id"]
+                or webhook["owner"]["id"] == user["id"]
             )
         )
 
@@ -1225,3 +1256,59 @@ class TestDeleteWebhooks:
 
         response = get_method(username, f"webhooks/{webhook_id}", org_id=org_id)
         assert response.status_code == HTTPStatus.NOT_FOUND
+
+    def test_admin_can_delete_server_webhook(self, webhooks, find_users):
+        username, webhook_id = next(
+            (user["username"], webhook["id"])
+            for user in find_users(privilege="admin")
+            for webhook in webhooks
+            if webhook["type"] == "server" and webhook["owner"]["id"] != user["id"]
+        )
+
+        response = delete_method(username, f"webhooks/{webhook_id}")
+        assert response.status_code == HTTPStatus.NO_CONTENT
+
+        response = get_method(username, f"webhooks/{webhook_id}")
+        assert response.status_code == HTTPStatus.NOT_FOUND
+
+    def test_non_admin_cannot_delete_server_webhook(self, webhooks, find_users):
+        username, webhook_id = next(
+            (user["username"], webhook["id"])
+            for user in find_users(exclude_privilege="admin")
+            for webhook in webhooks
+            if webhook["type"] == "server"
+        )
+
+        response = delete_method(username, f"webhooks/{webhook_id}")
+        assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+class TestGetWebhookEvents:
+    def _get_events(self, **kwargs):
+        response = get_method("admin1", "webhooks/events", **kwargs)
+        assert response.status_code == HTTPStatus.OK
+        return response.json()
+
+    @pytest.mark.parametrize("webhook_type", ["project", "organization", "server"])
+    def test_can_get_events_of_each_type(self, webhook_type):
+        events = self._get_events(type=webhook_type)
+
+        assert events["webhook_type"] == webhook_type
+        assert events["events"]
+
+    def test_all_type_returns_events_of_every_type(self):
+        events_by_type = {
+            webhook_type: self._get_events(type=webhook_type)["events"]
+            for webhook_type in ["project", "organization", "server"]
+        }
+        expected_keys = {event["key"] for events in events_by_type.values() for event in events}
+
+        all_events = self._get_events(type="all")
+
+        assert all_events["webhook_type"] == "all"
+        assert {event["key"] for event in all_events["events"]} == expected_keys
+
+    def test_cannot_get_events_of_unknown_type(self):
+        response = get_method("admin1", "webhooks/events", type="unknown")
+
+        assert response.status_code == HTTPStatus.BAD_REQUEST

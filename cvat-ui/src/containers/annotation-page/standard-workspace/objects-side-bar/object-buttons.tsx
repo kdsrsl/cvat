@@ -6,15 +6,22 @@
 import React from 'react';
 import { connect } from 'react-redux';
 
-import { ObjectState, Job } from 'cvat-core-wrapper';
+import {
+    ObjectState, Job, ObjectType, ShapeType,
+} from 'cvat-core-wrapper';
 import isAbleToChangeFrame from 'utils/is-able-to-change-frame';
 import { ThunkDispatch } from 'utils/redux';
-import { updateAnnotationsAsync, changeFrameAsync, changeHideActiveObjectAsync } from 'actions/annotation-actions';
+import {
+    updateAnnotationsAsync,
+    changeFrameAsync,
+    changeHideActiveObjectAsync,
+} from 'actions/annotation-actions';
 import { CombinedState } from 'reducers';
 import ItemButtonsComponent from 'components/annotation-page/standard-workspace/objects-side-bar/object-item-buttons';
+import { TrackerButton } from 'components/annotation-page/standard-workspace/tracker-controls';
+import { getObjectStateByClientID } from 'utils/objects-sidebar';
 
 interface OwnProps {
-    readonly: boolean;
     clientID: number;
     outsideDisabled?: boolean;
     hiddenDisabled?: boolean;
@@ -54,11 +61,7 @@ function mapStateToProps(state: CombinedState, own: OwnProps): StateToProps {
     const {
         clientID, outsideDisabled, hiddenDisabled, keyframeDisabled,
     } = own;
-    let [objectState] = states.filter((_objectState): boolean => _objectState.clientID === clientID);
-    if (!objectState) {
-        const elements = states.map((_objectState: any): any[] => _objectState.elements).flat();
-        [objectState] = elements.filter((_objectState): boolean => _objectState.clientID === clientID);
-    }
+    const objectState = getObjectStateByClientID(states, clientID)!;
 
     return {
         objectState,
@@ -120,35 +123,27 @@ class ItemButtonsWrapper extends React.PureComponent<StateToProps & DispatchToPr
     };
 
     private lock = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.lock = true;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.lock = true;
+        this.commit();
     };
 
     private unlock = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.lock = false;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.lock = false;
+        this.commit();
     };
 
     private pin = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.pinned = true;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.pinned = true;
+        this.commit();
     };
 
     private unpin = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.pinned = false;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.pinned = false;
+        this.commit();
     };
 
     private show = (): void => {
@@ -172,51 +167,39 @@ class ItemButtonsWrapper extends React.PureComponent<StateToProps & DispatchToPr
     };
 
     private setOccluded = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.occluded = true;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.occluded = true;
+        this.commit();
     };
 
     private unsetOccluded = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.occluded = false;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.occluded = false;
+        this.commit();
     };
 
     private setOutside = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.outside = true;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.outside = true;
+        this.commit();
     };
 
     private unsetOutside = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.outside = false;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.outside = false;
+        this.commit();
     };
 
     private setKeyframe = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.keyframe = true;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.keyframe = true;
+        this.commit();
     };
 
     private unsetKeyframe = (): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.keyframe = false;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.keyframe = false;
+        this.commit();
     };
 
     private commit(): void {
@@ -234,7 +217,6 @@ class ItemButtonsWrapper extends React.PureComponent<StateToProps & DispatchToPr
     public render(): JSX.Element {
         const {
             objectState,
-            readonly,
             frameNumber,
             outsideDisabled,
             hiddenDisabled,
@@ -258,7 +240,9 @@ class ItemButtonsWrapper extends React.PureComponent<StateToProps & DispatchToPr
 
         return (
             <ItemButtonsComponent
-                readonly={readonly}
+                trackingControl={objectType === ObjectType.TRACK && shapeType === ShapeType.RECTANGLE ? (
+                    <TrackerButton objectState={objectState} />
+                ) : undefined}
                 parentID={parentID}
                 objectType={objectType}
                 shapeType={shapeType}

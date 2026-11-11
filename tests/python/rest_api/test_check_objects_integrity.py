@@ -12,7 +12,12 @@ from deepdiff import DeepDiff
 from shared.utils import config
 
 
+@pytest.mark.usefixtures(
+    # RQ jobs running concurrently after other tests can create data races with these test cases
+    "restore_redis_inmem_per_class"
+)
 @pytest.mark.usefixtures("restore_db_per_class")
+@pytest.mark.integrity_check
 class TestGetResources:
     @pytest.mark.parametrize("path", config.ASSETS_DIR.glob("*.json"))
     def test_check_objects_integrity(self, path: Path):
@@ -25,6 +30,8 @@ class TestGetResources:
                 "consensus_settings",
             ]:
                 endpoint = "/".join(endpoint.split("_"))
+            elif endpoint == "access_tokens":
+                endpoint = "auth/access_tokens"
 
             if endpoint == "annotations":
                 objects = json.load(f)
@@ -39,17 +46,50 @@ class TestGetResources:
                         )
                         == {}
                     )
+            elif endpoint == "auth/access_tokens":
+                objects = json.load(f)
+                assert set(objects) == {"user"}
+
+                for username, tokens in objects["user"].items():
+                    response = config.get_paginated_collection(username, "auth/access_tokens")
+                    assert (
+                        DeepDiff(
+                            tokens,
+                            response,
+                            ignore_order=True,
+                        )
+                        == {}
+                    )
             else:
-                response = config.get_method("admin1", endpoint, page_size="all")
+                request_params = {}
+                if endpoint == "quality/reports":
+                    request_params["include_legacy"] = "true"
+
+                resp_results = config.get_paginated_collection("admin1", endpoint, **request_params)
                 json_objs = json.load(f)
-                resp_objs = response.json()
+
+                if endpoint == "quality/settings":
+                    for collection in (json_objs["results"], resp_results):
+                        for settings in collection:
+                            settings.pop("updated_date", None)
+                            for requirement in settings.get("requirements", []):
+                                requirement.pop("created_date", None)
+                                requirement.pop("updated_date", None)
+                elif endpoint == "webhooks":
+                    # Queued deliveries can finish after the database has been restored.
+                    for collection in (json_objs["results"], resp_results):
+                        for webhook in collection:
+                            webhook.pop("last_status", None)
+                            webhook.pop("last_delivery_date", None)
 
                 assert (
                     DeepDiff(
-                        json_objs,
-                        resp_objs,
+                        json_objs["results"],
+                        resp_results,
                         ignore_order=True,
-                        exclude_regex_paths=r"root\['results'\]\[\d+\]\['last_login'\]",
+                        exclude_regex_paths=[
+                            r"root\[\d+\]\['last_login'\]",
+                        ],
                     )
                     == {}
                 )

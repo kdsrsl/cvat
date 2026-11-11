@@ -8,6 +8,8 @@ nameOverride: ""
 fullnameOverride: ""
 
 cvat:
+  ingress:
+    annotations: {}
   backend:
     labels: {}
     annotations: {}
@@ -15,6 +17,7 @@ cvat:
     affinity: {}
     tolerations: []
     additionalEnv: []
+    numProxies: 1
 
     # This should only be used by supercharts;
     # to set custom environment for a Helm release, use additionalEnv.
@@ -22,11 +25,17 @@ cvat:
 
     additionalVolumes: []
     additionalVolumeMounts: []
+    # Support for Bitnami legacy chart:
+    # This setting is used to override Redis service name.
+    # Bitnami chart require "cvat-redis-master" override. CloudPirates chart does not need this override.
+    # If you use external Redis, use .Values.redis.external.host = your_redis_service + .Values.redis.enabled = false instead
+    redisInmemHostOverride: "{{ .Release.Name }}-redis-master"
     # -- The service account the backend pods will use to interact with the Kubernetes API
     serviceAccount:
       name: default
 
     initializer:
+      enabled: true
       labels: {}
       annotations: {}
       resources: {}
@@ -64,6 +73,7 @@ cvat:
         timeoutSeconds: 10
       export:
         replicas: 2
+        numProcs: 1
         labels: {}
         annotations: {}
         resources: {}
@@ -74,6 +84,7 @@ cvat:
         additionalVolumeMounts: []
       import:
         replicas: 2
+        numProcs: 1
         labels: {}
         annotations: {}
         resources: {}
@@ -84,6 +95,7 @@ cvat:
         additionalVolumeMounts: []
       annotation:
         replicas: 1
+        numProcs: 1
         labels: {}
         annotations: {}
         resources: {}
@@ -94,6 +106,7 @@ cvat:
         additionalVolumeMounts: []
       webhooks:
         replicas: 1
+        numProcs: 1
         labels: {}
         annotations: {}
         resources: {}
@@ -102,8 +115,10 @@ cvat:
         additionalEnv: []
         additionalVolumes: []
         additionalVolumeMounts: []
+        terminationGracePeriodSeconds: 30
       qualityreports:
         replicas: 1
+        numProcs: 1
         labels: {}
         annotations: {}
         resources: {}
@@ -114,6 +129,7 @@ cvat:
         additionalVolumeMounts: []
       chunks:
         replicas: 2
+        numProcs: 1
         labels: {}
         annotations: {}
         resources: {}
@@ -124,6 +140,7 @@ cvat:
         additionalVolumeMounts: []
       consensus:
         replicas: 1
+        numProcs: 1
         labels: {}
         annotations: {}
         resources: {}
@@ -134,6 +151,7 @@ cvat:
         additionalVolumeMounts: []
       utils:
         replicas: 1
+        numProcs: 1
         labels: {}
         annotations: {}
         resources: {}
@@ -142,13 +160,18 @@ cvat:
         additionalEnv: []
         additionalVolumes: []
         additionalVolumeMounts: []
-        extraArgs: []
     replicas: 1
     image: cvat/server
     tag: dev
     imagePullPolicy: Always
     permissionFix:
       enabled: true
+      image: busybox
+      tag: 1.36.1
+      imagePullPolicy: IfNotPresent
+      # commandOverride: []
+      paths:
+        - /home/django
     service:
       annotations: {}
       spec:
@@ -211,14 +234,14 @@ cvat:
     service:
       type: ClusterIP
       ports:
-        - port: 80
-          targetPort: 80
+        - port: 8000
+          targetPort: 8000
           protocol: TCP
           name: http
   opa:
     replicas: 1
     image: openpolicyagent/opa
-    tag: 0.63.0
+    tag: 1.12.2
     imagePullPolicy: IfNotPresent
     labels: {}
     #  test: test
@@ -251,7 +274,11 @@ cvat:
     # -   mountPath: /tmp
     #     name: tmp
     #     subPath: test
-    composeCompatibleServiceName: true # Sets service name to opa in order to be compatible with Docker Compose. Necessary because changing IAM_OPA_DATA_URL via environment variables in current images. Hinders multiple deployment due to duplicate name
+    # Keep the default probe tied to bundle availability in normal deployments.
+    # This makes OPA health reflect whether it has successfully loaded policy data
+    # from the CVAT backend. Deployments may override this to plain `/health`
+    # if they intentionally want process-health-only probes.
+    probePath: /health?bundles
     readinessProbe:
       enabled: true
       periodSeconds: 15
@@ -272,13 +299,13 @@ cvat:
     enabled: true
     external:
       host: kvrocks-external.localdomain
-    existingSecret: "cvat-kvrocks-secret"
+    existingSecret: "{{ .Release.Name }}-kvrocks-secret"
     secret:
       create: true
-      name: cvat-kvrocks-secret
+      name: "{{ .Release.Name }}-kvrocks-secret"
       password: cvat_kvrocks
     image: apache/kvrocks
-    tag: 2.7.0
+    tag: 2.15.0
     imagePullPolicy: IfNotPresent
     labels: {}
     #  test: test
@@ -324,10 +351,22 @@ cvat:
 #     accessModes:
 #       - ReadWriteOnce
       size: 100Gi
+      annotations: {}
+      volumeAttributesClass:
+        create: false
+#        name: "gp3-high-throughput"
+#        provider: ebs.csi.aws.com
+#        parameters:
+#          type: gp3
+#          provisioned-throughput: "250"
 
 postgresql:
   #See https://github.com/bitnami/charts/blob/master/bitnami/postgresql/ for more info
   enabled: true # false for external db
+  image:
+    registry: docker.io
+    repository: cvat/postgresql
+    tag: 15.2.0-debian-11-r0
   external:
     # Ignored if an empty value is set
     host: ""
@@ -348,20 +387,73 @@ postgresql:
     postgres_password: cvat_postgresql_postgres
     replication_password: cvat_postgresql_replica
 
+## Values for cloudpirates pgsql
+#postgresql:
+#  enabled: true
+#  nameOverride: postgresql
+#  external:
+#    # Ignored if an empty value is set
+#    host: ""
+#    # Ignored if an empty value is set
+#    port: ""
+#  image:
+#    registry: docker.io
+#    repository: postgres
+#    # We want to go with 15 version as Bitnami has, but with some patches.
+#    tag: "15.19@sha256:9b1d34adbce1dd07ee6e94b4a2cf698884b89bd44a6c9c12f5da8f3acbfe4957"
+#    imagePullPolicy: IfNotPresent
+#
+## Create postgres superuser.
+#  auth:
+#    username: postgres
+#    database: postgres
+#    existingSecret: "{{ .Release.Name }}-postgres-secret"
+#    secretKeys:
+#      adminPasswordKey: postgres-password
+#
+## Create cvat user and database for CVAT. This is not a superuser.
+#  customUser:
+#    name: cvat
+#    database: cvat
+#    existingSecret: "{{ .Release.Name }}-postgres-secret"
+#    secretKeys:
+#      name: username
+#      database: database
+#      password: password
+#
+#  service:
+#    port: 5432
+#    targetPort: 5432
+## We are using new PVC. Precaution not to connect existing PVC
+#  persistence:
+#    enabled: true
+#    volumeName: data-cloudpirates
+#    size: 8Gi
+#  secret:
+#    create: true
+#    name: "{{ .Release.Name }}-postgres-secret"
+#    password: cvat_postgresql
+#    postgres_password: cvat_postgresql_postgres
+#    replication_password: cvat_postgresql_replica
+
+
 # https://artifacthub.io/packages/helm/bitnami/redis
 redis:
   enabled: true
+  image:
+    registry: docker.io
+    repository: library/redis
+    tag: 7.2.11
   external:
     host: 127.0.0.1
   architecture: standalone
   auth:
-    existingSecret: "cvat-redis-secret"
+    existingSecret: "{{ .Release.Name }}-redis-secret"
     existingSecretPasswordKey: password
   secret:
     create: true
-    name: cvat-redis-secret
+    name: "{{ .Release.Name }}-redis-secret"
     password: cvat_redis
-  # TODO: persistence options
 
 nuclio:
   enabled: false
@@ -377,6 +469,8 @@ nuclio:
 analytics:
   # Set clickhouse.enabled to false if you disable analytics or use an external database
   enabled: true
+  ingress:
+    annotations: {}
   clickhouseDb: cvat
   clickhouseUser: user
   clickhousePassword: user
@@ -392,23 +486,32 @@ vector:
   dataDir: "/vector-data-dir"
   containerPorts:
     - name: http
-      containerPort: 80
+      containerPort: 8282
       protocol: TCP
   service:
     ports:
       - name: http
-        port: 80
+        port: 8282
         protocol: TCP
   image:
     tag: "0.26.0-alpine"
+  securityContext:
+    runAsNonRoot: true
+
+    # Workaround for <https://github.com/vectordotdev/vector/issues/1599>.
+    runAsUser: 1000
+    runAsGroup: 1000
 
 clickhouse:
   # Set to false in case of external db usage
   enabled: true
+  image:
+    registry: docker.io
+    repository: cvat/clickhouse
+    tag: 23.12.2-debian-11-r0
   shards: 1
   replicaCount: 1
   extraEnvVarsSecret: cvat-analytics-secret
-  initdbScriptsSecret: cvat-clickhouse-init
   auth:
     username: user
     existingSecret: cvat-analytics-secret
@@ -451,7 +554,7 @@ grafana:
   dashboardsConfigMaps:
     default: "cvat-grafana-dashboards"
   plugins:
-    - grafana-clickhouse-datasource
+    - grafana-clickhouse-datasource 4.8.2
   grafana.ini:
     server:
       root_url: https://cvat.local/analytics

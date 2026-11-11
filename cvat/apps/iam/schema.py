@@ -6,10 +6,15 @@
 import re
 import textwrap
 
-from drf_spectacular.authentication import SessionScheme, TokenScheme
-from drf_spectacular.extensions import OpenApiAuthenticationExtension
+from drf_spectacular.authentication import BasicScheme, SessionScheme, TokenScheme
+from drf_spectacular.extensions import OpenApiAuthenticationExtension, OpenApiFilterExtension
 from drf_spectacular.openapi import AutoSchema
+from drf_spectacular.utils import PolymorphicProxySerializer
 from rest_framework import serializers
+
+
+class BasicAuthenticationScheme(BasicScheme):
+    target_class = "cvat.apps.iam.authentication.BasicAuthenticationEx"
 
 
 class SignatureAuthenticationScheme(OpenApiAuthenticationExtension):
@@ -39,49 +44,66 @@ class TokenAuthenticationScheme(TokenScheme):
     priority = 0
     match_subclasses = True
 
-    def get_security_requirement(self, auto_schema):
-        # These schemes must be used together
-        return {"sessionAuth": [], "csrfAuth": [], self.name: []}
-
     def get_security_definition(self, auto_schema):
         schema = super().get_security_definition(auto_schema)
         schema["x-token-prefix"] = self.target.keyword
-        schema["description"] = textwrap.dedent(
-            f"""
-            To authenticate using a token (or API key), you need to have 3 components in a request:
-            - the 'sessionid' cookie
-            - the 'csrftoken' cookie or 'X-CSRFTOKEN' header
-            - the 'Authentication' header with the '{self.target.keyword} ' prefix
+        schema["description"] = textwrap.dedent(f"""\
+            Deprecated.
 
             You can obtain an API key (the token) from the server response on
-            the basic auth request.
-        """
-        )
+            the /api/auth/login/ endpoint.
+        """)
         return schema
 
 
-class CookieAuthenticationScheme(SessionScheme):
+class SessionAuthenticationScheme(SessionScheme):
     """
     This class adds csrftoken cookie into security sections. It must be used together with
     the 'sessionid' cookie.
     """
 
-    name = ["sessionAuth", "csrfAuth"]
+    name = ["sessionAuth", "csrfAuth", "csrfHeaderAuth"]
     priority = 0
-
-    def get_security_requirement(self, auto_schema):
-        # These schemes cannot be used separately
-        return None
 
     def get_security_definition(self, auto_schema):
         sessionid_schema = super().get_security_definition(auto_schema)
-        csrftoken_schema = {
+
+        csrf_token_description = textwrap.dedent("""\
+            A CSRF protection token. Can be received in the 'csrftoken' cookie in the
+            server response on the /api/auth/login endpoint. The 'Origin' header
+            must also be specified in the request.
+        """)
+
+        csrftoken_cookie_schema = {
             "type": "apiKey",
             "in": "cookie",
             "name": "csrftoken",
-            "description": "Can be sent as a cookie or as the X-CSRFTOKEN header",
+            "description": csrf_token_description,
         }
-        return [sessionid_schema, csrftoken_schema]
+        csrftoken_header_schema = {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-CSRFToken",
+            "description": csrf_token_description,
+        }
+        return [sessionid_schema, csrftoken_cookie_schema, csrftoken_header_schema]
+
+
+class SimpleFilterExtension(OpenApiFilterExtension):
+    """
+    Preserve CVAT's existing OpenAPI schema for SimpleFilter backends.
+
+    drf-spectacular's DjangoFilterExtension matches DjangoFilterBackend subclasses since
+    tfranzel/drf-spectacular@d4d16ac.
+    Increase the priority to select this extension over DjangoFilterExtension.
+    """
+
+    target_class = "cvat.apps.engine.filters.SimpleFilter"
+    match_subclasses = True
+    priority = 1
+
+    def get_schema_operation_parameters(self, auto_schema, *args, **kwargs):
+        return self.target.get_schema_operation_parameters(auto_schema.view)
 
 
 class CustomAutoSchema(AutoSchema):
@@ -109,12 +131,17 @@ class CustomAutoSchema(AutoSchema):
     def _get_request_for_media_type(self, serializer, *args, **kwargs):
         # Enables support for required=False serializers in request body specification
         # in drf-spectacular. Doesn't block other extensions on the target serializer.
-        # This is supported by OpenAPI and by SDK generator, but not by drf-spectacular
+        # This is supported by OpenAPI and by the SDK generator, but not by drf-spectacular.
 
         schema, required = super()._get_request_for_media_type(serializer, *args, **kwargs)
 
         if isinstance(serializer, serializers.Serializer):
             if not serializer.required:
                 required = False
+            elif isinstance(serializer, PolymorphicProxySerializer):
+                # PolymorphicProxySerializer has no fields of its own (they live in the wrapped
+                # serializers), so drf-spectacular makes the body optional, even if
+                # serializer.required=True.
+                required = True
 
         return schema, required

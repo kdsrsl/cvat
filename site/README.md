@@ -25,6 +25,52 @@ description: >
 ---
 ```
 
+### How to mark a page as product-specific
+
+CVAT has three products: **Community** (free, self-hosted), **Online** (managed cloud,
+with Solo and Team plans), and **Enterprise** (self-hosted, paid). Most documentation
+applies to all three, since Online and Enterprise both build on top of Community
+functionality — Enterprise in particular is a superset of Community, not a separate
+product, so a page is only Community-only if Enterprise genuinely replaces it with its
+own version (for example, deployment guides). When in doubt, assume a page is shared.
+
+**Default: no tag needed.** A page with no `products` field is treated as relevant to
+every product. Do not add a tag just to say "this applies everywhere" — only tag pages
+that are restricted to a subset of products.
+
+**Whole-page restriction:** if an entire page only applies to one or more products (e.g.
+a paid feature, or a product-specific deployment guide that fully replaces the Community
+version), add a `products` field to the front matter:
+
+```
+---
+title: "Title"
+products:
+  - enterprise
+---
+```
+
+Allowed values: `community`, `online`, `enterprise`. Use as many as apply. This renders a
+"Relevant for" badge at the top of the page and adds the page to the corresponding
+`/docs/products/<name>/` listing (see `layouts/shortcodes/pages-by-product.html` and
+`layouts/partials/product-tags.html`).
+
+**Partial-page restriction:** if a page is mostly shared but just one paragraph, list
+item, or table cell describes a gated feature, don't tag the whole page — use the inline
+badge shortcode instead, right next to the relevant text:
+
+```
+{{< product-badge "online,enterprise" >}}
+```
+
+**Solo vs. Team (within Online):** there's no separate front matter field for this — the
+product-level tags don't distinguish plans within Online. If a feature differs between
+Solo and Team (e.g. only Team can create organizations and invite members), call it out
+with a short inline note near that section instead.
+
+Before tagging, check the actual restriction rather than guessing from folder location
+or a legacy URL alias — verify what the page's text says, and if there's no explicit
+statement, confirm with the team before adding a tag.
 
 ### How to start the site locally
 
@@ -61,7 +107,24 @@ By default `npm` installs tools under the directory where you run `npm install`.
 The full documentation is available
 [here](https://www.docsy.dev/docs/get-started/other-options/#for-an-existing-site).
 
-4. To preview your site locally, use:
+4. Populate the SDK examples tree
+
+Several docs pages embed scripts from `cvat-sdk/examples/` via the
+`include-code` Hugo shortcode, which reads them from
+`site/assets/sdk-examples/`. That directory is gitignored, so before
+running `hugo server` you need to populate it — otherwise the embedded
+code blocks will be empty.
+
+Symlink the examples directory into the site tree:
+
+```bash
+ln -s ../../cvat-sdk/examples site/assets/sdk-examples
+```
+
+Edits to the example scripts are then picked up automatically on the
+next `hugo server` refresh.
+
+5. To preview your site locally, use:
 
 ```bash
 (cd site/ && hugo server)
@@ -80,13 +143,11 @@ pip -m venv venv
 pip install -r requirements.txt
 ```
 
-The documentation site includes both old and new releases. Because of this,
-you will need tooling for all these releases. Currently, it means you need
-in your environment:
-- `hugo-0.110` - for new docs
-- `hugo-0.83` - for older docs
+The documentation site includes the last MAX_VERSIONS_TO_BUILD releases
+(they are defined in `build_docs.py`). To build the website, you only need:
+- `hugo-0.110` - for all documentation builds
 
-Please download these hugo releases (both extended), and make such binaries
+Please download this hugo release (extended), and make the binary
 available in your `PATH` environment variable.
 
 On Linux, you can install it this way:
@@ -96,11 +157,6 @@ wget https://github.com/gohugoio/hugo/releases/download/v0.110.0/hugo_extended_0
 (mkdir hugo_extended_0.110.0_Linux-64bit && tar -xf hugo_extended_0.110.0_Linux-64bit.tar.gz -C hugo_extended_0.110.0_Linux-64bit)
 cd hugo_extended_0.110.0_Linux-64bit
 sudo cp hugo /usr/local/bin/hugo-0.110
-
-wget https://github.com/gohugoio/hugo/releases/download/v0.83.0/hugo_extended_0.83.0_Linux-64bit.tar.gz
-(mkdir hugo_extended_0.83.0_Linux-64bit && tar -xf hugo_extended_0.83.0_Linux-64bit.tar.gz -C hugo_extended_0.83.0_Linux-64bit)
-cd hugo_extended_0.83.0_Linux-64bit
-sudo cp hugo /usr/local/bin/hugo-0.83
 ```
 
 2. Use the commands that generate a static site in the `public/` folder:
@@ -116,6 +172,11 @@ python build_docs.py
 The resulting folder contains the whole site, which can be published by a server like Apache.
 Read more [here](https://www.docsy.dev/docs/getting-started/)
 and [here](https://gohugo.io/hosting-and-deployment/).
+
+You can also deploy the website locally:
+```bash
+python -m http.server -d path/to/public
+```
 
 ### How to update the submodule of the Docsy theme
 

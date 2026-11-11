@@ -25,6 +25,7 @@ from django.urls import include, path
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("", include("cvat.apps.engine.urls")),
+    path("", include("cvat.apps.redis_handler.urls")),
     path("django-rq/", include("django_rq.urls")),
 ]
 
@@ -51,3 +52,9 @@ if apps.is_installed("health_check"):
 
 if apps.is_installed("cvat.apps.consensus"):
     urlpatterns.append(path("api/", include("cvat.apps.consensus.urls")))
+
+if apps.is_installed("cvat.apps.access_tokens"):
+    urlpatterns.append(path("api/", include("cvat.apps.access_tokens.urls")))
+
+if apps.is_installed("cvat.apps.growth"):
+    urlpatterns.append(path("api/", include("cvat.apps.growth.urls")))

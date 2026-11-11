@@ -10,7 +10,7 @@ import { taskName, labelName } from '../../support/const';
 context("Object can't be draggable/resizable in AAM", () => {
     const issueId = '2486';
     const createRectangleShape2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Shape',
         labelName,
         firstX: 250,
@@ -22,6 +22,7 @@ context("Object can't be draggable/resizable in AAM", () => {
     let shapeXPos = 0;
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTaskJob(taskName);
     });
 

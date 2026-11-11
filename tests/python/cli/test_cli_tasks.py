@@ -4,6 +4,7 @@
 
 import json
 import os
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,7 @@ class TestCliTasks(TestCliBase):
         files = generate_images(self.tmp_path, 7)
         files.sort(reverse=True)
         frame_step = 3
+        subset = "Validation"
 
         stdout = self.run_cli(
             "task",
@@ -100,6 +102,8 @@ class TestCliTasks(TestCliBase):
             str(frame_step),
             "--bug_tracker",
             "http://localhost/bug",
+            "--subset",
+            subset,
         )
 
         task_id = int(stdout.rstrip("\n"))
@@ -110,6 +114,7 @@ class TestCliTasks(TestCliBase):
         ]
         assert task.get_meta().frame_filter == f"step={frame_step}"
         assert task.bug_tracker == "http://localhost/bug"
+        assert task.subset == subset
 
     def test_can_list_tasks_in_simple_format(self, fxt_new_task: Task):
         output = self.run_cli("task", "ls")
@@ -146,6 +151,48 @@ class TestCliTasks(TestCliBase):
 
         assert 0 < filename.stat().st_size
 
+    def test_can_download_task_annotations_with_server_filename(self, fxt_new_task: Task):
+        output_dir = str(self.tmp_path / "save_dir") + os.path.sep
+        self.run_cli(
+            "task",
+            "export-dataset",
+            str(fxt_new_task.id),
+            output_dir,
+            "--format",
+            "CVAT for images 1.1",
+            "--with-images",
+            "no",
+            "--completion_verification_period",
+            "0.01",
+        )
+
+        output_dir_files = os.listdir(output_dir)
+        assert len(output_dir_files) == 1
+        assert os.stat(output_dir + output_dir_files[0]).st_size > 0
+
+    def test_can_download_task_annotations_to_current_directory(
+        self, fxt_new_task: Task, monkeypatch: pytest.MonkeyPatch
+    ):
+        output_dir = self.tmp_path / "current_dir"
+        output_dir.mkdir()
+        monkeypatch.chdir(output_dir)
+
+        self.run_cli(
+            "task",
+            "export-dataset",
+            str(fxt_new_task.id),
+            "--format",
+            "CVAT for images 1.1",
+            "--with-images",
+            "no",
+            "--completion_verification_period",
+            "0.01",
+        )
+
+        output_dir_files = list(output_dir.iterdir())
+        assert len(output_dir_files) == 1
+        assert output_dir_files[0].stat().st_size > 0
+
     def test_can_download_task_backup(self, fxt_new_task: Task):
         filename = self.tmp_path / "task_{fxt_new_task.id}-cvat.zip"
         self.run_cli(
@@ -158,6 +205,23 @@ class TestCliTasks(TestCliBase):
         )
 
         assert 0 < filename.stat().st_size
+        with zipfile.ZipFile(filename) as backup_zip:
+            assert "task.json" in backup_zip.namelist()
+
+    def test_can_download_task_backup_with_server_filename(self, fxt_new_task: Task):
+        output_dir = str(self.tmp_path / "save_dir") + os.path.sep
+        self.run_cli(
+            "task",
+            "backup",
+            str(fxt_new_task.id),
+            output_dir,
+            "--completion_verification_period",
+            "0.01",
+        )
+
+        output_dir_files = os.listdir(output_dir)
+        assert len(output_dir_files) == 1
+        assert os.stat(output_dir + output_dir_files[0]).st_size > 0
 
     @pytest.mark.parametrize("quality", ("compressed", "original"))
     def test_can_download_task_frames(self, fxt_new_task: Task, quality: str):

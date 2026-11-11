@@ -43,8 +43,8 @@ context('Slice and join tools', { scrollBehavior: false }, () => {
         numberOfPoints: null,
     };
 
-    let taskID = null;
-    let jobID = null;
+    let taskId = null;
+    let jobId = null;
 
     before(() => {
         cy.visit('/auth/login');
@@ -65,24 +65,21 @@ context('Slice and join tools', { scrollBehavior: false }, () => {
             use_cache: true,
             sorting_method: 'lexicographical',
         }).then((response) => {
-            taskID = response.taskID;
-            [jobID] = response.jobIDs;
+            taskId = response.taskId;
+            [jobId] = response.jobIds;
         }).then(() => {
-            cy.visit(`/tasks/${taskID}/jobs/${jobID}`);
+            cy.visit(`/tasks/${taskId}/jobs/${jobId}`);
             cy.get('.cvat-canvas-container').should('exist').and('be.visible');
         });
     });
 
     after(() => {
         cy.logout();
-        cy.getAuthKey().then((response) => {
-            const authKey = response.body.key;
+        cy.task('getAuthHeaders').then((authHeaders) => {
             cy.request({
                 method: 'DELETE',
-                url: `/api/tasks/${taskID}`,
-                headers: {
-                    Authorization: `Token ${authKey}`,
-                },
+                url: `/api/tasks/${taskId}`,
+                headers: authHeaders,
             });
         });
     });
@@ -127,7 +124,7 @@ context('Slice and join tools', { scrollBehavior: false }, () => {
             cy.sliceShape('#cvat_canvas_shape_1', [[1, 1], [150, 230], [300, 230]]);
             checkSliceSuccess();
 
-            cy.joinShapes(['#cvat_canvas_shape_2', '#cvat_canvas_shape_3'], [[1, 1], [1, 1]]);
+            cy.joinShapes(['#cvat_canvas_shape_2', '#cvat_canvas_shape_3'], [[2, 2], [2, 2]]);
             checkJoinSuccess();
         });
 
@@ -195,7 +192,7 @@ context('Slice and join tools', { scrollBehavior: false }, () => {
             }
 
             cy.get('.cvat-canvas-hints-container').within(() => {
-                cy.contains('Set initial point on the shape contour').should('exist');
+                cy.contains('Click the shape outline to start cutting.').should('exist');
             });
             cy.get('body').type('{alt}j');
         });

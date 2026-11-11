@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: MIT
 
 import React, { useState } from 'react';
-import moment from 'moment';
+import dayjs from 'dayjs';
 import { Row, Col } from 'antd/lib/grid';
 import Title from 'antd/lib/typography/Title';
 import Text from 'antd/lib/typography/Text';
@@ -14,21 +14,27 @@ import LabelsEditor from 'components/labels-editor/labels-editor';
 import BugTrackerEditor from 'components/task-page/bug-tracker-editor';
 import UserSelector from 'components/task-page/user-selector';
 import MdGuideControl from 'components/md-guide/md-guide-control';
+import { CombinedState } from 'reducers';
+import { usePlugins } from 'utils/hooks';
 
 const core = getCore();
 
 interface DetailsComponentProps {
     project: Project;
-    onUpdateProject: (project: Project) => void;
+    onUpdateProject: (project: Project, fields?: Parameters<Project['save']>[0]) => Promise<Project>;
 }
 
 export default function DetailsComponent(props: DetailsComponentProps): JSX.Element {
     const { project, onUpdateProject } = props;
     const [projectName, setProjectName] = useState(project.name);
+    const extras = usePlugins(
+        (state: CombinedState) => state.plugins.components.projectPage.details.topBar.extras,
+        props,
+    );
 
     return (
         <div data-cvat-project-id={project.id} className='cvat-project-details'>
-            <Row>
+            <Row justify='space-between' align='middle'>
                 <Col>
                     <Title
                         level={4}
@@ -44,13 +50,20 @@ export default function DetailsComponent(props: DetailsComponentProps): JSX.Elem
                         {projectName}
                     </Title>
                 </Col>
+                <Col>
+                    {extras.sort((left, right) => left.weight - right.weight).map(({
+                        component: Component,
+                    }, index) => (
+                        <Component key={index} targetProps={props} />
+                    ))}
+                </Col>
             </Row>
             <Row justify='space-between' className='cvat-project-description'>
                 <Col>
                     <Text type='secondary'>
                         {`Project #${project.id} created`}
                         {project.owner ? ` by ${project.owner.username}` : null}
-                        {` on ${moment(project.createdDate).format('MMMM Do YYYY')}`}
+                        {` on ${dayjs(project.createdDate).format('MMMM Do YYYY')}`}
                     </Text>
                     <MdGuideControl instanceType='project' id={project.id} />
                     <BugTrackerEditor
@@ -73,11 +86,12 @@ export default function DetailsComponent(props: DetailsComponentProps): JSX.Elem
                 </Col>
             </Row>
             <LabelsEditor
-                labels={project.labels.map((label: any): string => label.toJSON())}
-                onSubmit={(labels: any[]): void => {
-                    project.labels = labels.map((labelData): any => new core.classes.Label(labelData));
-                    onUpdateProject(project);
-                }}
+                labels={project.labels.map((label) => label.toJSON())}
+                onSubmit={(labels: any[]): Promise<Project> => (
+                    onUpdateProject(project, {
+                        labels: labels.map((labelData): any => new core.classes.Label(labelData)),
+                    })
+                )}
             />
         </div>
     );

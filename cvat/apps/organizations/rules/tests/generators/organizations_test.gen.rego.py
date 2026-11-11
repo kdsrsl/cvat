@@ -89,6 +89,7 @@ def get_data(scope, context, ownership, privilege, membership, resource):
             ),
         },
         "resource": {**resource, "owner": {"id": random.randrange(300, 400)}} if resource else None,
+        "settings": {"organizations_min_role_to_create": "user"},
     }
 
     user_id = data["auth"]["user"]["id"]
@@ -121,7 +122,7 @@ def is_valid(scope, context, ownership, privilege, membership, resource):
         return False
     if resource is None and scope != "list":
         return False
-    if scope == "list" and ownership != "None":
+    if scope == "list" and ownership != "none":
         return False
 
     return True

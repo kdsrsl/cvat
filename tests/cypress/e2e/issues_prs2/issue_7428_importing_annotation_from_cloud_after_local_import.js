@@ -13,7 +13,7 @@ context('Incorrect cloud storage filename used in subsequent import.', () => {
     const issueId = '7428';
     const exportFormat = 'CVAT for images';
     const rectangleShape2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Shape',
         labelName,
         firstX: 400,
@@ -25,8 +25,8 @@ context('Incorrect cloud storage filename used in subsequent import.', () => {
     const cloudStorageData = {
         displayName: 'Demo bucket',
         resource: 'public',
-        manifest: 'manifest.jsonl',
-        endpointUrl: Cypress.config('minioUrl'),
+        manifest: 'images_with_manifest/manifest.jsonl',
+        endpointUrl: Cypress.config('motoUrl'),
     };
 
     function uploadToTask({
@@ -63,7 +63,7 @@ context('Incorrect cloud storage filename used in subsequent import.', () => {
         cy.get('.cvat-modal-content-load-task-annotation')
             .should('be.visible')
             .within(() => {
-                cy.contains('button', 'Update').click();
+                cy.contains('button', 'Replace annotations').click();
             });
         cy.get('.cvat-notification-notice-import-annotation-start').should('be.visible');
         cy.closeNotification('.cvat-notification-notice-import-annotation-start');
@@ -72,6 +72,7 @@ context('Incorrect cloud storage filename used in subsequent import.', () => {
     }
 
     before(() => {
+        cy.prepareUserSession();
         createdCloudStorageId = cy.attachS3Bucket(cloudStorageData);
         cy.goToTaskList();
         cy.openTaskJob(taskName);

@@ -11,10 +11,12 @@ const defaultState: PluginsState = {
     initialized: false,
     list: {
         ANALYTICS: false,
-        MODELS: false,
     },
     current: {},
     callbacks: {
+        auth: {
+            onAuthenticationStart: [],
+        },
         annotationPage: {
             header: {
                 menu: {
@@ -24,21 +26,35 @@ const defaultState: PluginsState = {
         },
     },
     overridableComponents: {
+        app: {
+            serverUnavailable: [],
+        },
         annotationPage: {
             header: {
                 // not used
                 saveAnnotationButton: [],
             },
+            conflictRequirement: [],
         },
         qualityControlPage: {
-            overviewTab: [],
-            allocationTable: [],
+            task: {
+                requirementsTab: [],
+                allocationTable: [],
+            },
+            project: {
+                requirementsTab: [],
+            },
         },
         analyticsReportPage: {
             content: [],
         },
     },
     components: {
+        qualityControlPage: {
+            tabs: {
+                items: [],
+            },
+        },
         header: {
             userMenu: {
                 items: [],
@@ -46,6 +62,28 @@ const defaultState: PluginsState = {
         },
         loginPage: {
             loginForm: [],
+        },
+        annotationPage: {
+            player: {
+                slider: [],
+            },
+            menuActions: {
+                items: [],
+            },
+        },
+        taskPage: {
+            details: {
+                topBar: {
+                    extras: [],
+                },
+            },
+        },
+        projectPage: {
+            details: {
+                topBar: {
+                    extras: [],
+                },
+            },
         },
         modelsPage: {
             topBar: {
@@ -86,6 +124,11 @@ const defaultState: PluginsState = {
         about: {
             links: {
                 items: [],
+            },
+        },
+        aiTools: {
+            interactors: {
+                extras: [],
             },
         },
     },
@@ -212,7 +255,7 @@ export default function (state: PluginsState = defaultState, action: PluginActio
             const { path, callback } = action.payload;
             const updatedState = {
                 ...state,
-                components: { ...state.components },
+                callbacks: { ...state.callbacks },
             };
 
             const container = findContainerFromPath(path, updatedState, 'callbacks') as CallableFunction[];
@@ -224,7 +267,7 @@ export default function (state: PluginsState = defaultState, action: PluginActio
             const { path, callback } = action.payload;
             const updatedState = {
                 ...state,
-                components: { ...state.components },
+                callbacks: { ...state.callbacks },
             };
 
             const container = findContainerFromPath(path, updatedState, 'callbacks') as CallableFunction[];

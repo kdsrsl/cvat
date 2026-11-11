@@ -9,13 +9,14 @@ import os.path as osp
 import re
 import tempfile
 import zipfile
-from collections.abc import Generator, Iterable
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import timedelta
 from enum import Enum
 from threading import Lock
-from typing import Any
+from typing import Any, Protocol
+from uuid import UUID
 
 import attrs
 import django_rq
@@ -26,15 +27,96 @@ from pottery import Redlock
 
 
 def current_function_name(depth=1):
-    return inspect.getouterframes(inspect.currentframe())[depth].function
+    frame = inspect.currentframe()
+    if frame is None:
+        return "[unknown]"
+
+    for _ in range(depth):
+        frame = frame.f_back
+        assert frame is not None, "not enough stack frames"
+
+    return frame.f_code.co_name
 
 
 def make_zip_archive(src_path, dst_path):
-    with zipfile.ZipFile(dst_path, 'w') as archive:
-        for (dirpath, _, filenames) in os.walk(src_path):
+    with zipfile.ZipFile(dst_path, "w") as archive:
+        for dirpath, _, filenames in os.walk(src_path):
             for name in filenames:
                 path = osp.join(dirpath, name)
                 archive.write(path, osp.relpath(path, src_path))
+
+
+DEFAULT_EXCEPTION_CHAIN_DEPTH = 5
+DEFAULT_EXCEPTION_CHAIN_LENGTH = 1024
+
+
+def format_exception_chain(
+    ex: Exception,
+    *,
+    max_depth: int = DEFAULT_EXCEPTION_CHAIN_DEPTH,
+    max_length: int = DEFAULT_EXCEPTION_CHAIN_LENGTH,
+    ignore: Callable[[BaseException], bool] | None = None,
+) -> str:
+    """
+    Produces a message including the exception cause chain.
+
+    Both explicit causes (raise ... from ...) and implicit ones (an exception raised while
+    another one was being handled) are followed. At most max_depth links are followed and
+    the result is truncated to max_length. Messages already reported by descendants are skipped.
+
+    The links accepted by the ignore callback are not reported, but are still followed.
+    """
+
+    messages: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = ex
+    while isinstance(current, Exception) and id(current) not in seen and len(seen) < max_depth:
+        seen.add(id(current))
+
+        if ignore is not None and ignore(current):
+            message = ""
+        else:
+            message = str(current).strip() or type(current).__name__
+
+        # Skip the messages already included in their descendant
+        if message and (not messages or not messages[-1].endswith(message)):
+            messages.append(message)
+
+        # Follow the context too, because some code may miss the "from" clause.
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+
+    if not messages:
+        return type(ex).__name__
+
+    result = messages[0]
+    for message in messages[1:]:
+        result += (" " if result.endswith((".", "!", "?", ";", ":")) else ": ") + message
+
+    if len(result) > max_length:
+        result = result[:max_length] + "..."
+
+    return result
+
+
+def format_import_exception(ex: Exception) -> str:
+    """
+    Produces a user-facing message for a dataset or annotation import failure,
+    e.g. "Failed to import dataset 'yolo' at '/tmp/xxx'. [Errno 2] No such file
+    or directory: '/tmp/xxx/obj.names'".
+    """
+
+    def is_implementation_detail(current: BaseException) -> bool:
+        # Private types (e.g. Datumaro's _ImportFail) carry no information for the user
+        return type(current).__name__.startswith("_") or (
+            # Datumaro raises this error internally for old-style extractors during the import.
+            # It is always handled, but remains in the context and in the resulting message.
+            "unexpected keyword argument 'ctx'"
+            in str(current)
+        )
+
+    return format_exception_chain(ex, ignore=is_implementation_detail)
 
 
 def faster_deepcopy(v):
@@ -54,6 +136,7 @@ def faster_deepcopy(v):
 
 class LockNotAvailableError(Exception):
     pass
+
 
 class CacheFileOrDirPathParseError(Exception):
     pass
@@ -78,7 +161,6 @@ def get_export_cache_lock(
 
     if acquire_timeout < 0:
         raise ValueError("acquire_timeout must be a non-negative number")
-
 
     if isinstance(ttl, timedelta):
         ttl = ttl.total_seconds()
@@ -105,18 +187,27 @@ def get_export_cache_lock(
         if acquired:
             lock.release()
 
+
 class OperationType(str, Enum):
     EXPORT = "export"
+
+    def __str__(self):
+        return self.value
 
 
 class ExportFileType(str, Enum):
     ANNOTATIONS = "annotations"
     BACKUP = "backup"
     DATASET = "dataset"
+    EVENTS = "events"
 
     @classmethod
     def values(cls) -> list[str]:
-        return list(map(lambda x: x.value, cls))
+        return [x.value for x in cls]
+
+    def __str__(self):
+        return self.value
+
 
 class InstanceType(str, Enum):
     PROJECT = "project"
@@ -125,31 +216,44 @@ class InstanceType(str, Enum):
 
     @classmethod
     def values(cls) -> list[str]:
-        return list(map(lambda x: x.value, cls))
+        return [x.value for x in cls]
 
-@attrs.frozen
-class _ParsedExportFilename:
-    file_type: ExportFileType
-    file_ext: str
+    def __str__(self):
+        return self.value
+
+
+class FileId(Protocol):
+    value: str
+
+
+@attrs.frozen(kw_only=True)
+class SimpleFileId(FileId):
+    value: str = attrs.field()
+
+
+@attrs.frozen(kw_only=True)
+class ConstructedFileId(FileId):
     instance_type: InstanceType = attrs.field(converter=InstanceType)
-    instance_id: int
+    instance_id: int = attrs.field(converter=int)
     instance_timestamp: float = attrs.field(converter=float)
 
+    @property
+    def value(self):
+        return "-".join(map(str, [self.instance_type, self.instance_id, self.instance_timestamp]))
 
-@attrs.frozen
-class ParsedDatasetFilename(_ParsedExportFilename):
-    format_repr: str
 
-
-@attrs.frozen
-class ParsedBackupFilename(_ParsedExportFilename):
-    pass
+@attrs.frozen(kw_only=True)
+class ParsedExportFilename:
+    file_type: ExportFileType = attrs.field(converter=ExportFileType)
+    file_ext: str
+    file_id: FileId
 
 
 class TmpDirManager:
     SPLITTER = "-"
     TMP_ROOT = settings.TMP_FILES_ROOT
     TMP_FILE_OR_DIR_RETENTION_DAYS = settings.TMP_FILE_OR_DIR_RETENTION_DAYS
+    IGNORE_CLEANUP_ERRORS = settings.IGNORE_TMP_FOLDER_CLEANUP_ERRORS
 
     @classmethod
     @contextmanager
@@ -158,7 +262,6 @@ class TmpDirManager:
         *,
         prefix: str | None = None,
         suffix: str | None = None,
-        ignore_cleanup_errors: bool | None = None,
     ) -> Generator[str, Any, Any]:
         """
         The method allows to create a temporary directory and
@@ -168,7 +271,7 @@ class TmpDirManager:
         for k, v in {
             "prefix": prefix,
             "suffix": suffix,
-            "ignore_cleanup_errors": ignore_cleanup_errors,
+            "ignore_cleanup_errors": cls.IGNORE_CLEANUP_ERRORS,
         }.items():
             if v is not None:
                 params[k] = v
@@ -191,15 +294,28 @@ class TmpDirManager:
 
 
 class ExportCacheManager:
+    ROOT = settings.EXPORT_CACHE_ROOT
+
     SPLITTER = "-"
     INSTANCE_PREFIX = "instance"
-    FILE_NAME_TEMPLATE = SPLITTER.join([
-        "{instance_type}", "{instance_id}", "{file_type}", INSTANCE_PREFIX +
-        # store the instance timestamp in the file name to reliably get this information
-        # ctime / mtime do not return file creation time on linux
-        # mtime is used for file usage checks
-        "{instance_timestamp}{optional_suffix}.{file_ext}"
-    ])
+    FILE_NAME_TEMPLATE_WITH_INSTANCE = SPLITTER.join(
+        [
+            "{instance_type}",
+            "{instance_id}",
+            "{file_type}",
+            INSTANCE_PREFIX +
+            # store the instance timestamp in the file name to reliably get this information
+            # ctime / mtime do not return file creation time on linux
+            # mtime is used for file usage checks
+            "{instance_timestamp}{optional_suffix}.{file_ext}",
+        ]
+    )
+
+    FILE_NAME_TEMPLATE_WITHOUT_INSTANCE = SPLITTER.join(["{file_type}", "{file_id}.{file_ext}"])
+
+    @classmethod
+    def file_types_with_general_template(cls):
+        return (ExportFileType.EVENTS,)
 
     @classmethod
     def make_dataset_file_path(
@@ -219,18 +335,16 @@ class ExportCacheManager:
         file_type = ExportFileType.DATASET if save_images else ExportFileType.ANNOTATIONS
 
         normalized_format_name = make_file_name(to_snake_case(format_name))
-        filename = cls.FILE_NAME_TEMPLATE.format_map(
-            {
-                "instance_type": instance_type,
-                "instance_id": instance_id,
-                "file_type": file_type,
-                "instance_timestamp": instance_timestamp,
-                "optional_suffix": cls.SPLITTER + normalized_format_name,
-                "file_ext": file_ext,
-            }
+        filename = cls.FILE_NAME_TEMPLATE_WITH_INSTANCE.format(
+            instance_type=instance_type,
+            instance_id=instance_id,
+            file_type=file_type,
+            instance_timestamp=instance_timestamp,
+            optional_suffix=cls.SPLITTER + normalized_format_name,
+            file_ext=file_ext,
         )
 
-        return osp.join(settings.EXPORT_CACHE_ROOT, filename)
+        return osp.join(cls.ROOT, filename)
 
     @classmethod
     def make_backup_file_path(
@@ -239,65 +353,85 @@ class ExportCacheManager:
         instance_type: str,
         instance_id: int,
         instance_timestamp: float,
+        lightweight: bool,
     ) -> str:
         instance_type = InstanceType(instance_type.lower())
-        filename = cls.FILE_NAME_TEMPLATE.format_map(
-            {
-                "instance_type": instance_type,
-                "instance_id": instance_id,
-                "file_type": ExportFileType.BACKUP,
-                "instance_timestamp": instance_timestamp,
-                "optional_suffix": "",
-                "file_ext": "zip",
-            }
+        filename = cls.FILE_NAME_TEMPLATE_WITH_INSTANCE.format(
+            instance_type=instance_type,
+            instance_id=instance_id,
+            file_type=ExportFileType.BACKUP,
+            instance_timestamp=instance_timestamp,
+            optional_suffix=cls.SPLITTER + "lightweight" if lightweight else "",
+            file_ext="zip",
         )
-        return osp.join(settings.EXPORT_CACHE_ROOT, filename)
+        return osp.join(cls.ROOT, filename)
 
     @classmethod
-    def parse_filename(
-        cls, filename: str,
-    ) -> ParsedDatasetFilename | ParsedBackupFilename:
+    def make_file_path(
+        cls,
+        *,
+        file_type: str,
+        file_id: UUID,
+        file_ext: str,
+    ) -> str:
+        filename = cls.FILE_NAME_TEMPLATE_WITHOUT_INSTANCE.format(
+            # convert here to be sure only expected types are used
+            file_type=ExportFileType(file_type),
+            file_id=file_id,
+            file_ext=file_ext,
+        )
+        return osp.join(cls.ROOT, filename)
+
+    @classmethod
+    def parse_filename(cls, filename: str) -> ParsedExportFilename:
         basename, file_ext = osp.splitext(filename)
         file_ext = file_ext.strip(".").lower()
-        basename_match = re.fullmatch(
-            (
-                rf"^(?P<instance_type>{'|'.join(InstanceType.values())})"
-                rf"{cls.SPLITTER}(?P<instance_id>\d+)"
-                rf"{cls.SPLITTER}(?P<file_type>{'|'.join(ExportFileType.values())})"
-                rf"{cls.SPLITTER}(?P<unparsed>.+)$"
-            ),
-            basename,
-        )
-
-        if not basename_match:
-            raise CacheFileOrDirPathParseError(f"Couldn't parse file name: {basename!r}")
-
-        fragments = basename_match.groupdict()
-        fragments["instance_id"] = int(fragments["instance_id"])
-
-        unparsed = fragments.pop("unparsed")[len(cls.INSTANCE_PREFIX):]
-        specific_params = {}
-
-        if fragments["file_type"] in (ExportFileType.DATASET, ExportFileType.ANNOTATIONS):
-            try:
-                instance_timestamp, format_repr = unparsed.split(cls.SPLITTER, maxsplit=1)
-            except ValueError:
-                raise CacheFileOrDirPathParseError(f"Couldn't parse file name: {basename!r}")
-
-            specific_params["format_repr"] = format_repr
-            ParsedFileNameClass = ParsedDatasetFilename
-        else:
-            instance_timestamp = unparsed
-            ParsedFileNameClass = ParsedBackupFilename
 
         try:
-            parsed_file_name = ParsedFileNameClass(
-                file_ext=file_ext,
-                instance_timestamp=instance_timestamp,
-                **fragments,
-                **specific_params,
+            for exp_file_type in cls.file_types_with_general_template():
+                if basename.startswith(exp_file_type):
+                    file_type, file_id = basename.split(cls.SPLITTER, maxsplit=1)
+
+                    return ParsedExportFilename(
+                        file_type=file_type, file_id=SimpleFileId(value=file_id), file_ext=file_ext
+                    )
+
+            basename_match = re.fullmatch(
+                (
+                    rf"^(?P<instance_type>{'|'.join(InstanceType.values())})"
+                    rf"{cls.SPLITTER}(?P<instance_id>\d+)"
+                    rf"{cls.SPLITTER}(?P<file_type>{'|'.join(ExportFileType.values())})"
+                    rf"{cls.SPLITTER}(?P<unparsed>.+)$"
+                ),
+                basename,
             )
-        except ValueError as ex:
+
+            if not basename_match:
+                assert False  # will be handled
+
+            fragments = basename_match.groupdict()
+            unparsed = fragments.pop("unparsed")[len(cls.INSTANCE_PREFIX) :]
+            instance_timestamp = unparsed
+
+            if fragments["file_type"] in (ExportFileType.DATASET, ExportFileType.ANNOTATIONS):
+                # The "format" is a part of file id, but there is actually
+                # no need to use it after filename parsing, so just drop it.
+                instance_timestamp, _ = unparsed.split(cls.SPLITTER, maxsplit=1)
+            elif fragments["file_type"] == ExportFileType.BACKUP:
+                # Backup filename may have "lightweight" suffix
+                split_unparsed = unparsed.split(cls.SPLITTER, maxsplit=1)
+                if len(split_unparsed) > 1:
+                    instance_timestamp, _ = split_unparsed
+
+            parsed_file_name = ParsedExportFilename(
+                file_type=fragments.pop("file_type"),
+                file_id=ConstructedFileId(
+                    instance_timestamp=instance_timestamp,
+                    **fragments,
+                ),
+                file_ext=file_ext,
+            )
+        except Exception as ex:
             raise CacheFileOrDirPathParseError(f"Couldn't parse file name: {basename!r}") from ex
 
         return parsed_file_name
@@ -328,3 +462,30 @@ def linear_sort_shapes(shapes: Iterable) -> list:
             if i in d:
                 sorted_shapes.append(d[i])
     return sorted_shapes
+
+
+def make_getter_by_frame_for_annotation_stream(
+    gen: Iterable[dict],
+) -> Callable[[int], Generator[dict, None, None]]:
+    if isinstance(gen, list):
+        gen = iter(gen)
+    ann = None
+
+    def get(frame_index: int) -> Generator[dict, None, None]:
+        nonlocal ann
+
+        while True:
+            if ann is None:
+                try:
+                    ann = next(gen)
+                except StopIteration:
+                    break
+
+            assert ann["frame"] >= frame_index
+            if ann["frame"] == frame_index:
+                yield ann
+                ann = None
+            else:
+                break
+
+    return get

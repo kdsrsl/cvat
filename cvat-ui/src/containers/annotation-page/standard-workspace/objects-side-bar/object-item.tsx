@@ -15,38 +15,51 @@ import {
     copyShape as copyShapeAction,
     activateObject as activateObjectAction,
     switchPropagateVisibility as switchPropagateVisibilityAction,
+    switchSimplifyVisibility as switchSimplifyVisibilityAction,
     removeObject as removeObjectAction,
+    collapseObjectItems,
+    selectObjectsAsync,
 } from 'actions/annotation-actions';
 import {
-    ActiveControl, CombinedState, ColorBy,
-    Workspace,
+    ActiveControl, CombinedState, ColorBy, isMultiSelectionSupported,
 } from 'reducers';
 import { openAnnotationsActionModal } from 'components/annotation-page/annotations-actions/annotations-actions-modal';
 import ObjectStateItemComponent from 'components/annotation-page/standard-workspace/objects-side-bar/object-item';
-import { getColor } from 'components/annotation-page/standard-workspace/objects-side-bar/shared';
+import { getObjectStateColor } from 'components/annotation-page/standard-workspace/objects-side-bar/shared';
 import openCVWrapper from 'utils/opencv-wrapper/opencv-wrapper';
 import { shift } from 'utils/math';
 import {
-    Label, ObjectState, Attribute, Job, ShapeType,
+    Label, ObjectState, Attribute, Job, ShapeType, ObjectType,
 } from 'cvat-core-wrapper';
 import { Canvas, CanvasMode } from 'cvat-canvas-wrapper';
 import { Canvas3d } from 'cvat-canvas3d-wrapper';
 import { filterApplicableLabels } from 'utils/filter-applicable-labels';
 import { toClipboard } from 'utils/to-clipboard';
+import changeObjectOrientation, { type OrientationAngle } from 'utils/change-object-orientation';
+import { getObjectStateByClientID } from 'utils/objects-sidebar';
 
 interface OwnProps {
-    readonly: boolean;
     clientID: number;
     objectStates: ObjectState[];
+    visibleObjectIDs?: number[];
+    visibleSkeletonElements?: Record<number, number[]>;
+    zLayerDragProps?: React.HTMLAttributes<HTMLElement>;
+    zLayerDragging?: boolean;
+    partsExpanded?: boolean;
+    onPartsExpandedChange?(clientID: number, expanded: boolean): void;
 }
 
 interface StateToProps {
     objectState: ObjectState;
+    editingStateID: number | null;
     labels: Label[];
     attributes: Attribute[];
     jobInstance: Job;
     frameNumber: number;
     activated: boolean;
+    multiSelected: boolean;
+    multiSelectionSupported: boolean;
+    selectedStatesID: number[];
     colorBy: ColorBy;
     ready: boolean;
     activeControl: ActiveControl;
@@ -54,7 +67,7 @@ interface StateToProps {
     maxZLayer: number;
     normalizedKeyMap: Record<string, string>;
     canvasInstance: Canvas | Canvas3d;
-    workspace: Workspace;
+    focusedObjectPadding: number;
 }
 
 interface DispatchToProps {
@@ -64,8 +77,11 @@ interface DispatchToProps {
     removeObject: (objectState: ObjectState) => void;
     copyShape: (objectState: ObjectState) => void;
     switchPropagateVisibility: (visible: boolean) => void;
+    switchSimplifyVisibility: (clientID: number | null) => void;
     changeGroupColor(group: number, color: string): void;
     updateActiveControl(activeControl: ActiveControl): void;
+    expandObject(objectState: ObjectState): void;
+    selectObjects(selectedStatesID: number[]): void;
 }
 
 function mapStateToProps(state: CombinedState, own: OwnProps): StateToProps {
@@ -73,6 +89,7 @@ function mapStateToProps(state: CombinedState, own: OwnProps): StateToProps {
         annotation: {
             annotations: {
                 activatedStateID,
+                selectedStatesID,
                 zLayer: { min: minZLayer, max: maxZLayer },
             },
             job: { attributes: jobAttributes, instance: jobInstance, labels },
@@ -80,21 +97,23 @@ function mapStateToProps(state: CombinedState, own: OwnProps): StateToProps {
                 frame: { number: frameNumber },
             },
             canvas: { instance: canvasInstance, ready, activeControl },
+            editing: { objectState: editingState },
             workspace,
         },
         settings: {
             shapes: { colorBy },
+            workspace: { focusedObjectPadding },
         },
         shortcuts: { normalizedKeyMap },
     } = state;
 
     const { objectStates: states, clientID } = own;
-    const stateIDs = states.map((_state: any): number => _state.clientID);
-    const index = stateIDs.indexOf(clientID);
+    const objectState = getObjectStateByClientID(states, clientID)!;
 
     return {
-        objectState: states[index],
-        attributes: jobAttributes[states[index].label.id as number],
+        objectState,
+        editingStateID: editingState?.clientID ?? null,
+        attributes: jobAttributes[objectState.label.id as number],
         labels,
         ready,
         activeControl,
@@ -102,11 +121,14 @@ function mapStateToProps(state: CombinedState, own: OwnProps): StateToProps {
         jobInstance,
         frameNumber,
         activated: activatedStateID === clientID,
+        multiSelected: isMultiSelectionSupported(workspace) && selectedStatesID.includes(clientID),
+        multiSelectionSupported: isMultiSelectionSupported(workspace),
+        selectedStatesID,
         minZLayer,
         maxZLayer,
         normalizedKeyMap,
         canvasInstance: canvasInstance as Canvas | Canvas3d,
-        workspace,
+        focusedObjectPadding,
     };
 }
 
@@ -115,8 +137,8 @@ function mapDispatchToProps(dispatch: any): DispatchToProps {
         changeFrame(frame: number): void {
             dispatch(changeFrameAsync(frame));
         },
-        updateState(state: any): void {
-            dispatch(updateAnnotationsAsync([state]));
+        updateState(state: any): Promise<void> {
+            return dispatch(updateAnnotationsAsync([state]));
         },
         activateObject(activatedStateID: number | null): void {
             dispatch(activateObjectAction(activatedStateID, null, null));
@@ -131,11 +153,20 @@ function mapDispatchToProps(dispatch: any): DispatchToProps {
         switchPropagateVisibility(visible: boolean): void {
             dispatch(switchPropagateVisibilityAction(visible));
         },
+        switchSimplifyVisibility(clientID: number | null): void {
+            dispatch(switchSimplifyVisibilityAction(clientID));
+        },
         changeGroupColor(group: number, color: string): void {
             dispatch(changeGroupColorAsync(group, color));
         },
         updateActiveControl(activeControl: ActiveControl): void {
             dispatch(updateActiveControlAction(activeControl));
+        },
+        expandObject(objectState: ObjectState): void {
+            dispatch(collapseObjectItems([objectState], false));
+        },
+        selectObjects(selectedStatesID: number[]): void {
+            dispatch(selectObjectsAsync(selectedStatesID));
         },
     };
 }
@@ -143,7 +174,6 @@ function mapDispatchToProps(dispatch: any): DispatchToProps {
 type Props = StateToProps & DispatchToProps & OwnProps;
 interface State {
     labels: Label[];
-    elements: number[];
 }
 
 class ObjectItemContainer extends React.PureComponent<Props, State> {
@@ -151,7 +181,6 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
         super(props);
         this.state = {
             labels: props.labels,
-            elements: props.objectState.elements.map((el: ObjectState) => el.clientID as number),
         };
     }
 
@@ -170,28 +199,26 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
     }
 
     private copy = (): void => {
-        const { objectState, readonly, copyShape } = this.props;
-        if (!readonly) {
-            copyShape(objectState);
-        }
+        const { objectState, copyShape } = this.props;
+        copyShape(objectState);
     };
 
     private propagate = (): void => {
-        const { switchPropagateVisibility, readonly } = this.props;
-        if (!readonly) {
-            switchPropagateVisibility(true);
-        }
+        const { switchPropagateVisibility } = this.props;
+        switchPropagateVisibility(true);
     };
 
     private edit = (): void => {
         const {
-            objectState, readonly, canvasInstance, updateActiveControl,
+            objectState, editingStateID, canvasInstance, updateActiveControl,
         } = this.props;
 
-        if (!readonly && canvasInstance instanceof Canvas &&
+        if (canvasInstance instanceof Canvas &&
             [ShapeType.POLYGON, ShapeType.MASK].includes(objectState.shapeType)
         ) {
-            if (canvasInstance.mode() !== CanvasMode.IDLE) {
+            const mode = canvasInstance.mode();
+            const isEditingSameObject = mode === CanvasMode.EDIT && editingStateID === objectState.clientID;
+            if (mode !== CanvasMode.IDLE && !isEditingSameObject) {
                 canvasInstance.cancel();
             }
 
@@ -202,10 +229,10 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
 
     private slice = async (): Promise<void> => {
         const {
-            objectState, readonly, canvasInstance, updateActiveControl,
+            objectState, canvasInstance, updateActiveControl,
         } = this.props;
 
-        if (!readonly && canvasInstance instanceof Canvas &&
+        if (canvasInstance instanceof Canvas &&
             [ShapeType.POLYGON, ShapeType.MASK].includes(objectState.shapeType)
         ) {
             if (canvasInstance.mode() !== CanvasMode.IDLE) {
@@ -221,14 +248,17 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
         }
     };
 
+    private requestSimplification = (): void => {
+        const { objectState, switchSimplifyVisibility } = this.props;
+        switchSimplifyVisibility(objectState.clientID as number);
+    };
+
     private remove = (): void => {
         const {
-            objectState, readonly, removeObject,
+            objectState, removeObject,
         } = this.props;
 
-        if (!readonly) {
-            removeObject(objectState);
-        }
+        removeObject(objectState);
     };
 
     private createURL = (): void => {
@@ -242,10 +272,7 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
     };
 
     private switchOrientation = (): void => {
-        const { objectState, readonly, updateState } = this.props;
-        if (readonly) {
-            return;
-        }
+        const { objectState, updateState } = this.props;
 
         if (objectState.shapeType === ShapeType.CUBOID) {
             this.switchCuboidOrientation();
@@ -274,22 +301,46 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
         }
     };
 
-    private toBackground = (): void => {
-        const { objectState, readonly, minZLayer } = this.props;
-
-        if (!readonly) {
-            objectState.zOrder = minZLayer - 1;
+    private changeOrientation = (degrees: OrientationAngle): void => {
+        const { objectState } = this.props;
+        if (changeObjectOrientation(objectState, degrees)) {
             this.commit();
         }
     };
 
-    private toForeground = (): void => {
-        const { objectState, readonly, maxZLayer } = this.props;
+    private toBackground = (): void => {
+        const { objectState, minZLayer } = this.props;
 
-        if (!readonly) {
-            objectState.zOrder = maxZLayer + 1;
-            this.commit();
-        }
+        objectState.zOrder = minZLayer - 1;
+        this.commit();
+    };
+
+    private toForeground = (): void => {
+        const { objectState, maxZLayer } = this.props;
+
+        objectState.zOrder = maxZLayer + 1;
+        this.commit();
+    };
+
+    private readonly toOneLayerBackward = (): void => {
+        const { objectState } = this.props;
+
+        objectState.zOrder -= 1;
+        this.commit();
+    };
+
+    private readonly toOneLayerForward = (): void => {
+        const { objectState } = this.props;
+
+        objectState.zOrder += 1;
+        this.commit();
+    };
+
+    private readonly toSpecificLayer = (zOrder: number): void => {
+        const { objectState } = this.props;
+
+        objectState.zOrder = zOrder;
+        this.commit();
     };
 
     private activate = (activeElementID?: number): void => {
@@ -305,6 +356,83 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
         }
     };
 
+    private activateSingle = (): void => {
+        const {
+            objectState, ready, activeControl, activateObject, selectObjects,
+            updateActiveControl, canvasInstance,
+        } = this.props;
+        if (!ready) return;
+
+        if (canvasInstance instanceof Canvas && activeControl === ActiveControl.SELECT) {
+            canvasInstance.selectObjects({ enabled: false });
+            updateActiveControl(ActiveControl.CURSOR);
+        }
+        selectObjects([]);
+        activateObject(objectState.clientID, null);
+    };
+
+    private toggleSelection = (): void => {
+        const {
+            objectState, selectedStatesID, selectObjects,
+        } = this.props;
+        if (objectState.objectType === ObjectType.TAG) return;
+        const clientID = objectState.clientID as number;
+        const nextSelection = selectedStatesID.includes(clientID) ?
+            selectedStatesID.filter((selectedClientID: number): boolean => selectedClientID !== clientID) :
+            [...selectedStatesID, clientID];
+
+        selectObjects(nextSelection);
+    };
+
+    private selectRange = (): void => {
+        const {
+            objectState, objectStates, selectedStatesID, visibleObjectIDs: orderedObjectIDs, selectObjects,
+        } = this.props;
+        if (objectState.objectType === ObjectType.TAG) return;
+        const visibleObjectIDs = orderedObjectIDs || objectStates.map(
+            (state: ObjectState): number => state.clientID as number,
+        );
+        const clientID = objectState.clientID as number;
+        const anchorID = [...selectedStatesID].reverse().find(
+            (id: number): boolean => visibleObjectIDs.includes(id),
+        );
+
+        if (typeof anchorID !== 'number') {
+            selectObjects([...selectedStatesID, clientID]);
+            return;
+        }
+
+        const from = visibleObjectIDs.indexOf(anchorID);
+        const to = visibleObjectIDs.indexOf(clientID);
+        if (from === -1 || to === -1) {
+            selectObjects([...selectedStatesID, clientID]);
+            return;
+        }
+        const range = visibleObjectIDs.slice(Math.min(from, to), Math.max(from, to) + 1);
+        const nextSelection = [...new Set([
+            ...selectedStatesID.filter((id: number): boolean => id !== clientID),
+            ...range.filter((id: number): boolean => id !== clientID),
+            clientID,
+        ])];
+        selectObjects(nextSelection);
+    };
+
+    private focusAndExpand = (): void => {
+        const {
+            objectState, canvasInstance, focusedObjectPadding, expandObject,
+        } = this.props;
+
+        if (objectState.objectType !== ObjectType.TAG) {
+            if (canvasInstance instanceof Canvas) {
+                canvasInstance.focus(objectState.clientID as number, focusedObjectPadding);
+            } else if (canvasInstance instanceof Canvas3d) {
+                canvasInstance.focus(objectState.clientID as number);
+            }
+        }
+
+        expandObject(objectState);
+    };
+
     private changeColor = (color: string): void => {
         const { objectState, colorBy, changeGroupColor } = this.props;
 
@@ -317,11 +445,9 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
     };
 
     private changeLabel = (label: any): void => {
-        const { objectState, readonly } = this.props;
-        if (!readonly) {
-            objectState.label = label;
-            this.commit();
-        }
+        const { objectState } = this.props;
+        objectState.label = label;
+        this.commit();
     };
 
     private switchCuboidOrientation = (): void => {
@@ -329,9 +455,9 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
             return points[12] > points[0];
         }
 
-        const { objectState, readonly } = this.props;
+        const { objectState } = this.props;
 
-        if (!readonly && objectState.shapeType === ShapeType.CUBOID) {
+        if (objectState.shapeType === ShapeType.CUBOID) {
             const points = objectState.points as number[];
             this.resetCuboidPerspective(false);
             objectState.points = shift(points, cuboidOrientationIsLeft(points) ? 4 : -4);
@@ -343,9 +469,9 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
         function cuboidOrientationIsLeft(points: number[]): boolean {
             return points[12] > points[0];
         }
-        const { objectState, readonly } = this.props;
+        const { objectState } = this.props;
 
-        if (!readonly && objectState.shapeType === ShapeType.CUBOID) {
+        if (objectState.shapeType === ShapeType.CUBOID) {
             const points = objectState.points as number[];
             const minD = {
                 x: (points[6] - points[2]) * 0.001,
@@ -379,30 +505,40 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
     };
 
     private commit(): void {
-        const { objectState, readonly, updateState } = this.props;
-        if (!readonly) {
-            updateState(objectState);
-        }
+        const { objectState, updateState } = this.props;
+        updateState(objectState);
     }
 
     public render(): JSX.Element {
-        const { labels, elements } = this.state;
+        const { labels } = this.state;
         const {
             objectState,
             attributes,
             activated,
+            multiSelected,
+            multiSelectionSupported,
+            selectedStatesID,
             colorBy,
             normalizedKeyMap,
-            readonly,
             jobInstance,
-            workspace,
+            zLayerDragProps,
+            zLayerDragging,
+            visibleSkeletonElements = {},
+            partsExpanded,
+            onPartsExpandedChange,
         } = this.props;
+        const elements = visibleSkeletonElements[objectState.clientID as number] ??
+            objectState.elements.map((el: ObjectState) => el.clientID as number);
 
         return (
             <ObjectStateItemComponent
                 jobInstance={jobInstance}
-                readonly={readonly}
+                zLayerDragProps={zLayerDragProps}
+                zLayerDragging={zLayerDragging}
                 activated={activated}
+                multiSelected={multiSelected}
+                selectionActive={multiSelectionSupported && selectedStatesID.length > 0}
+                multiSelectionSupported={multiSelectionSupported}
                 objectType={objectState.objectType}
                 shapeType={objectState.shapeType}
                 clientID={objectState.clientID as number}
@@ -410,25 +546,36 @@ class ObjectItemContainer extends React.PureComponent<Props, State> {
                 locked={objectState.lock}
                 labelID={objectState.label.id as number}
                 isGroundTruth={objectState.isGroundTruth}
-                color={getColor(objectState, colorBy)}
+                color={getObjectStateColor(objectState, colorBy).rgbComponents()}
                 attributes={attributes}
                 elements={elements}
+                partsExpanded={partsExpanded}
+                onPartsExpandedChange={onPartsExpandedChange}
                 normalizedKeyMap={normalizedKeyMap}
                 labels={labels}
                 colorBy={colorBy}
-                workspace={workspace}
                 activate={this.activate}
+                activateSingle={this.activateSingle}
+                toggleSelection={this.toggleSelection}
+                selectRange={this.selectRange}
+                focusAndExpand={this.focusAndExpand}
                 remove={this.remove}
                 copy={this.copy}
                 createURL={this.createURL}
                 propagate={this.propagate}
                 switchOrientation={this.switchOrientation}
+                changeOrientation={this.changeOrientation}
                 toBackground={this.toBackground}
                 toForeground={this.toForeground}
+                toOneLayerBackward={this.toOneLayerBackward}
+                toOneLayerForward={this.toOneLayerForward}
+                toSpecificLayer={this.toSpecificLayer}
+                zOrder={objectState.zOrder}
                 changeColor={this.changeColor}
                 changeLabel={this.changeLabel}
                 edit={this.edit}
                 slice={this.slice}
+                simplify={this.requestSimplification}
                 resetCuboidPerspective={this.resetCuboidPerspective}
                 runAnnotationAction={this.runAnnotationAction}
             />

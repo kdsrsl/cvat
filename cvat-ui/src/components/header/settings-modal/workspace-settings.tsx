@@ -13,36 +13,37 @@ import Select from 'antd/lib/select';
 
 import {
     MAX_ACCURACY,
-    marks,
 } from 'components/annotation-page/standard-workspace/controls-side-bar/approximation-accuracy';
 import { clamp } from 'utils/math';
 
 interface Props {
     autoSave: boolean;
     autoSaveInterval: number;
-    aamZoomMargin: number;
+    focusedObjectPadding: number;
     showAllInterpolationTracks: boolean;
     showObjectsTextAlways: boolean;
-    automaticBordering: boolean;
+    adaptiveZoom: boolean;
     intelligentPolygonCrop: boolean;
     defaultApproxPolyAccuracy: number;
     textFontSize: number;
     controlPointsSize: number;
     textPosition: 'center' | 'auto';
     textContent: string;
+    showConflictRequirements: boolean;
     showTagsOnFrame: boolean;
     onSwitchAutoSave(enabled: boolean): void;
     onChangeAutoSaveInterval(interval: number): void;
-    onChangeAAMZoomMargin(margin: number): void;
+    onChangeFocusedObjectPadding(padding: number): void;
     onChangeDefaultApproxPolyAccuracy(approxPolyAccuracy: number): void;
     onSwitchShowingInterpolatedTracks(enabled: boolean): void;
     onSwitchShowingObjectsTextAlways(enabled: boolean): void;
-    onSwitchAutomaticBordering(enabled: boolean): void;
+    onSwitchAdaptiveZoom(enabled: boolean): void;
     onSwitchIntelligentPolygonCrop(enabled: boolean): void;
     onChangeTextFontSize(fontSize: number): void;
     onChangeControlPointsSize(pointsSize: number): void;
     onChangeTextPosition(position: 'auto' | 'center'): void;
     onChangeTextContent(textContent: string[]): void;
+    onSwitchShowingConflictRequirements(enabled: boolean): void;
     onSwitchShowingTagsOnFrame(enabled: boolean): void;
 }
 
@@ -50,36 +51,38 @@ function WorkspaceSettingsComponent(props: Props): JSX.Element {
     const {
         autoSave,
         autoSaveInterval,
-        aamZoomMargin,
+        focusedObjectPadding,
         showAllInterpolationTracks,
         showObjectsTextAlways,
-        automaticBordering,
+        adaptiveZoom,
         intelligentPolygonCrop,
         defaultApproxPolyAccuracy,
         textFontSize,
         controlPointsSize,
         textPosition,
         textContent,
+        showConflictRequirements,
         showTagsOnFrame,
         onSwitchAutoSave,
         onChangeAutoSaveInterval,
-        onChangeAAMZoomMargin,
+        onChangeFocusedObjectPadding,
         onSwitchShowingInterpolatedTracks,
         onSwitchShowingObjectsTextAlways,
-        onSwitchAutomaticBordering,
+        onSwitchAdaptiveZoom,
         onSwitchIntelligentPolygonCrop,
         onChangeDefaultApproxPolyAccuracy,
         onChangeTextFontSize,
         onChangeControlPointsSize,
         onChangeTextPosition,
         onChangeTextContent,
+        onSwitchShowingConflictRequirements,
         onSwitchShowingTagsOnFrame,
     } = props;
 
     const minAutoSaveInterval = 1;
     const maxAutoSaveInterval = 60;
-    const minAAMMargin = 0;
-    const maxAAMMargin = 1000;
+    const minFocusedObjectPadding = 0;
+    const maxFocusedObjectPadding = 1000;
     const minControlPointsSize = 2;
     const maxControlPointsSize = 10;
 
@@ -169,6 +172,7 @@ function WorkspaceSettingsComponent(props: Props): JSX.Element {
                         <Select.Option value='source'>Source</Select.Option>
                         <Select.Option value='descriptions'>Descriptions</Select.Option>
                         <Select.Option value='dimensions'>Dimensions</Select.Option>
+                        <Select.Option value='layer'>Layer</Select.Option>
                     </Select>
                 </Col>
             </Row>
@@ -199,21 +203,34 @@ function WorkspaceSettingsComponent(props: Props): JSX.Element {
                     />
                 </Col>
             </Row>
-            <Row className='cvat-workspace-settings-autoborders cvat-player-setting'>
+            <Row className='cvat-workspace-settings-show-conflict-requirements cvat-player-setting'>
                 <Col span={24}>
                     <Checkbox
                         className='cvat-text-color'
-                        checked={automaticBordering}
+                        checked={showConflictRequirements}
                         onChange={(event: CheckboxChangeEvent): void => {
-                            onSwitchAutomaticBordering(event.target.checked);
+                            onSwitchShowingConflictRequirements(event.target.checked);
                         }}
                     >
-                        Automatic bordering
+                        Show requirements in conflict tooltips
+                    </Checkbox>
+                </Col>
+            </Row>
+            <Row className='cvat-workspace-settings-adaptive-zoom cvat-player-setting'>
+                <Col span={24}>
+                    <Checkbox
+                        className='cvat-text-color'
+                        checked={adaptiveZoom}
+                        onChange={(event: CheckboxChangeEvent): void => {
+                            onSwitchAdaptiveZoom(event.target.checked);
+                        }}
+                    >
+                        Adaptive zoom algorithm
                     </Checkbox>
                 </Col>
                 <Col span={24}>
                     <Text type='secondary'>
-                        Enable automatic bordering for polygons and polylines during drawing/editing
+                        Enable smoother version of zooming, compatible with a trackpad and pinch gestures
                     </Text>
                 </Col>
             </Row>
@@ -249,19 +266,24 @@ function WorkspaceSettingsComponent(props: Props): JSX.Element {
                     <Text type='secondary'>Show frame tags in the corner of the workspace</Text>
                 </Col>
             </Row>
-            <Row className='cvat-workspace-settings-aam-zoom-margin cvat-player-setting'>
+            <Row className='cvat-workspace-settings-focused-object-padding cvat-player-setting'>
                 <Col>
-                    <Text className='cvat-text-color'> Attribute annotation mode (AAM) zoom margin </Text>
+                    <Text className='cvat-text-color'> Focused object padding </Text>
                     <InputNumber
-                        min={minAAMMargin}
-                        max={maxAAMMargin}
-                        value={aamZoomMargin}
-                        onChange={(value: number | undefined | string): void => {
-                            if (typeof value !== 'undefined') {
-                                onChangeAAMZoomMargin(Math.floor(clamp(+value, minAAMMargin, maxAAMMargin)));
+                        min={minFocusedObjectPadding}
+                        max={maxFocusedObjectPadding}
+                        value={focusedObjectPadding}
+                        onChange={(value: number | null): void => {
+                            if (typeof value === 'number') {
+                                onChangeFocusedObjectPadding(
+                                    Math.floor(clamp(+value, minFocusedObjectPadding, maxFocusedObjectPadding)),
+                                );
                             }
                         }}
                     />
+                </Col>
+                <Col span={24}>
+                    <Text type='secondary'>Adds extra space in pixels around an object when it gets fitted</Text>
                 </Col>
             </Row>
             <Row className='cvat-workspace-settings-control-points-size cvat-player-setting'>
@@ -283,7 +305,7 @@ function WorkspaceSettingsComponent(props: Props): JSX.Element {
             </Row>
             <Row className='cvat-workspace-settings-approx-poly-threshold cvat-player-setting'>
                 <Col>
-                    <Text className='cvat-text-color'>Default number of points in polygon approximation</Text>
+                    <Text className='cvat-text-color'>Default polygon simplification threshold</Text>
                 </Col>
                 <Col span={7} offset={1}>
                     <Slider
@@ -293,11 +315,13 @@ function WorkspaceSettingsComponent(props: Props): JSX.Element {
                         value={defaultApproxPolyAccuracy}
                         dots
                         onChange={onChangeDefaultApproxPolyAccuracy}
-                        marks={marks}
                     />
                 </Col>
                 <Col>
-                    <Text type='secondary'>Works for serverless interactors and OpenCV scissors</Text>
+                    <Text type='secondary'>
+                        Higher values preserve more polygon detail. Used for serverless interactors,
+                        OpenCV scissors, and polygon simplification
+                    </Text>
                 </Col>
             </Row>
         </div>

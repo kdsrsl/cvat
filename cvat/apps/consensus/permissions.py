@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
+from enum import StrEnum
 from typing import cast
 
 from django.conf import settings
@@ -10,89 +11,67 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from cvat.apps.engine.models import Job, Project, Task
 from cvat.apps.engine.permissions import TaskPermission
 from cvat.apps.engine.types import ExtendedRequest
-from cvat.apps.iam.permissions import OpenPolicyAgentPermission, StrEnum, get_iam_context
+from cvat.apps.iam.permissions import OpenPolicyAgentPermission, get_iam_context
 
 from .models import ConsensusSettings
 
 
 class ConsensusMergePermission(OpenPolicyAgentPermission):
-    rq_job_owner_id: int | None
     task_id: int | None
 
     class Scopes(StrEnum):
         CREATE = "create"
-        VIEW_STATUS = "view:status"
 
     @classmethod
-    def create_scope_check_status(
-        cls, request: ExtendedRequest, rq_job_owner_id: int, iam_context=None
-    ):
-        if not iam_context and request:
-            iam_context = get_iam_context(request, None)
-        return cls(**iam_context, scope=cls.Scopes.VIEW_STATUS, rq_job_owner_id=rq_job_owner_id)
-
-    @classmethod
-    def create(cls, request, view, obj, iam_context):
+    def create(cls, request: ExtendedRequest, view, obj, iam_context):
         Scopes = cls.Scopes
 
         permissions = []
-        if view.basename == "consensus_merges":
-            for scope in cls.get_scopes(request, view, obj):
-                if scope == Scopes.CREATE:
-                    # Note: POST /api/consensus/merges is used to initiate report creation
-                    # and to check the operation status
-                    rq_id = request.query_params.get("rq_id")
-                    task_id = request.data.get("task_id")
-                    job_id = request.data.get("job_id")
+        for scope in cls.get_scopes(request, view, obj):
+            if scope == Scopes.CREATE:
+                # FUTURE-FIXME: use serializers for validation
+                task_id = request.data.get("task_id")
+                job_id = request.data.get("job_id")
 
-                    if not (task_id or job_id or rq_id):
-                        raise PermissionDenied(
-                            "Either task_id or job_id or rq_id must be specified"
-                        )
+                if not (task_id or job_id):
+                    raise PermissionDenied("Either task_id or job_id must be specified")
 
-                    if rq_id:
-                        # There will be another check for this case during request processing
-                        continue
-
-                    # merge is always at least at the task level, even for specific jobs
-                    if task_id is not None or job_id is not None:
-                        if job_id:
-                            try:
-                                job = Job.objects.select_related("segment").get(id=job_id)
-                            except Job.DoesNotExist:
-                                raise ValidationError("The specified job does not exist")
-
-                            task_id = job.get_task_id()
-
-                        # The request may have a different org or org unset
-                        # Here we need to retrieve iam_context for this user, based on the task_id
+                # merge is always at least at the task level, even for specific jobs
+                if task_id is not None or job_id is not None:
+                    if job_id:
                         try:
-                            task = Task.objects.get(id=task_id)
-                        except Task.DoesNotExist:
-                            raise ValidationError("The specified task does not exist")
+                            job = Job.objects.select_related("segment").get(id=job_id)
+                        except Job.DoesNotExist:
+                            raise ValidationError("The specified job does not exist")
 
-                        iam_context = get_iam_context(request, task)
+                        task_id = job.get_task_id()
 
-                    permissions.append(
-                        cls.create_base_perm(
-                            request,
-                            view,
-                            scope,
-                            iam_context,
-                            obj,
-                            task_id=task_id,
-                        )
+                    # The request may have a different org or org unset
+                    # Here we need to retrieve iam_context for this user, based on the task_id
+                    try:
+                        task = Task.objects.get(id=task_id)
+                    except Task.DoesNotExist:
+                        raise ValidationError("The specified task does not exist")
+
+                    iam_context = get_iam_context(request, task)
+
+                permissions.append(
+                    cls.create_base_perm(
+                        request,
+                        view,
+                        scope,
+                        iam_context,
+                        obj,
+                        task_id=task_id,
                     )
+                )
 
-                else:
-                    permissions.append(cls.create_base_perm(request, view, scope, iam_context, obj))
+            else:
+                permissions.append(cls.create_base_perm(request, view, scope, iam_context, obj))
 
         return permissions
 
     def __init__(self, **kwargs):
-        if "rq_job_owner_id" in kwargs:
-            self.rq_job_owner_id = int(kwargs.pop("rq_job_owner_id"))
-
         super().__init__(**kwargs)
         self.url = settings.IAM_OPA_DATA_URL + "/consensus_merges/allow"
 
@@ -125,7 +104,7 @@ class ConsensusMergePermission(OpenPolicyAgentPermission):
                 organization_id = task.organization_id
 
             data = {
-                "organization": {"id": organization_id},
+                "organization": self.make_id_dict(organization_id),
                 "task": (
                     {
                         "owner": {"id": task.owner_id},
@@ -143,8 +122,6 @@ class ConsensusMergePermission(OpenPolicyAgentPermission):
                     else None
                 ),
             }
-        elif self.scope == self.Scopes.VIEW_STATUS:
-            data = {"owner": {"id": self.rq_job_owner_id}}
 
         return data
 
@@ -162,42 +139,41 @@ class ConsensusSettingPermission(OpenPolicyAgentPermission):
         Scopes = cls.Scopes
 
         permissions = []
-        if view.basename == "consensus_settings":
-            for scope in cls.get_scopes(request, view, obj):
-                if scope in [Scopes.VIEW, Scopes.UPDATE]:
-                    obj = cast(ConsensusSettings, obj)
+        for scope in cls.get_scopes(request, view, obj):
+            if scope in [Scopes.VIEW, Scopes.UPDATE]:
+                obj = cast(ConsensusSettings, obj)
 
-                    if scope == Scopes.VIEW:
-                        task_scope = TaskPermission.Scopes.VIEW
-                    elif scope == Scopes.UPDATE:
-                        task_scope = TaskPermission.Scopes.UPDATE_DESC
-                    else:
-                        assert False
+                if scope == Scopes.VIEW:
+                    task_scope = TaskPermission.Scopes.VIEW
+                elif scope == Scopes.UPDATE:
+                    task_scope = TaskPermission.Scopes.UPDATE_DESC
+                else:
+                    assert False
 
-                    # Access rights are the same as in the owning task
-                    # This component doesn't define its own rules in this case
+                # Access rights are the same as in the owning task
+                # This component doesn't define its own rules in this case
+                permissions.append(
+                    TaskPermission.create_base_perm(
+                        request,
+                        view,
+                        iam_context=iam_context,
+                        scope=task_scope,
+                        obj=obj.task,
+                    )
+                )
+            elif scope == cls.Scopes.LIST:
+                if task_id := request.query_params.get("task_id", None):
                     permissions.append(
-                        TaskPermission.create_base_perm(
+                        TaskPermission.create_scope_view(
                             request,
-                            view,
+                            int(task_id),
                             iam_context=iam_context,
-                            scope=task_scope,
-                            obj=obj.task,
                         )
                     )
-                elif scope == cls.Scopes.LIST:
-                    if task_id := request.query_params.get("task_id", None):
-                        permissions.append(
-                            TaskPermission.create_scope_view(
-                                request,
-                                int(task_id),
-                                iam_context=iam_context,
-                            )
-                        )
 
-                    permissions.append(cls.create_scope_list(request, iam_context))
-                else:
-                    permissions.append(cls.create_base_perm(request, view, scope, iam_context, obj))
+                permissions.append(cls.create_scope_list(request, iam_context))
+            else:
+                permissions.append(cls.create_base_perm(request, view, scope, iam_context, obj))
 
         return permissions
 
@@ -228,7 +204,7 @@ class ConsensusSettingPermission(OpenPolicyAgentPermission):
 
             data = {
                 "id": self.obj.id,
-                "organization": {"id": organization_id},
+                "organization": self.make_id_dict(organization_id),
                 "task": (
                     {
                         "owner": {"id": task.owner_id},

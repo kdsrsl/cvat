@@ -10,7 +10,7 @@ context('Annotations statistics.', () => {
     const caseId = '48';
     const issueId = '2663';
     const createRectangleShape2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Shape',
         labelName,
         firstX: 250,
@@ -19,7 +19,7 @@ context('Annotations statistics.', () => {
         secondY: 450,
     };
     const createRectangleTrack2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Track',
         labelName,
         firstX: createRectangleShape2Points.firstX,
@@ -123,6 +123,7 @@ context('Annotations statistics.', () => {
     };
 
     before(() => {
+        cy.prepareUserSession();
         cy.openTaskJob(taskName);
         cy.createRectangle(createRectangleShape2Points);
         cy.createRectangle(createRectangleTrack2Points);
@@ -180,8 +181,8 @@ context('Annotations statistics.', () => {
                     cy.contains(labelName)
                         .parents('tr')
                         .find('td')
-                        .then((tableBodyFirstRowThs) => {
-                            const elTextContent = Array.from(tableBodyFirstRowThs).map((el) => el.textContent);
+                        .then((tableBodyFirstRowTds) => {
+                            const elTextContent = Array.from(tableBodyFirstRowTds).map((el) => el.textContent);
                             expect(elTextContent[0]).to.be.equal(labelName);
                             for (let i = 1; i < 7; i++) {
                                 expect(elTextContent[i]).to.be.equal('1 / 1'); // Rectangle, Polygon, Polyline, Points, Cuboids, Ellipses

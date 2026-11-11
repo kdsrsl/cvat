@@ -6,7 +6,7 @@
 import {
     ActionUnion, createAction, ThunkAction, ThunkDispatch,
 } from 'utils/redux';
-import { getCore, Job } from 'cvat-core-wrapper';
+import { getCore, Job, JobType } from 'cvat-core-wrapper';
 import { JobsQuery } from 'reducers';
 import { filterNull } from 'utils/filter-null';
 import { JobData } from 'components/create-job-page/job-form';
@@ -26,14 +26,18 @@ export enum JobsActionTypes {
     UPDATE_JOB_FAILED = 'UPDATE_JOB_FAILED',
     DELETE_JOB = 'DELETE_JOB',
     DELETE_JOB_SUCCESS = 'DELETE_JOB_SUCCESS',
+    OPEN_ADD_REPLICAS_MODAL = 'OPEN_ADD_REPLICAS_MODAL',
+    CLOSE_ADD_REPLICAS_MODAL = 'CLOSE_ADD_REPLICAS_MODAL',
+    OPEN_DISTRIBUTE_JOBS_MODAL = 'OPEN_DISTRIBUTE_JOBS_MODAL',
+    CLOSE_DISTRIBUTE_JOBS_MODAL = 'CLOSE_DISTRIBUTE_JOBS_MODAL',
     DELETE_JOB_FAILED = 'DELETE_JOB_FAILED',
 }
 
-interface JobsList extends Array<any> {
+export interface JobsList extends Array<Job> {
     count: number;
 }
 
-const jobsActions = {
+export const jobsActions = {
     getJobs: (query: Partial<JobsQuery>, fetchingTimestamp: number) => (
         createAction(JobsActionTypes.GET_JOBS, { query, fetchingTimestamp })
     ),
@@ -70,6 +74,18 @@ const jobsActions = {
     ),
     deleteJobFailed: (jobID: number, error: any) => (
         createAction(JobsActionTypes.DELETE_JOB_FAILED, { jobID, error })
+    ),
+    openAddReplicasModal: (jobs: Job[]) => (
+        createAction(JobsActionTypes.OPEN_ADD_REPLICAS_MODAL, { jobs })
+    ),
+    closeAddReplicasModal: () => (
+        createAction(JobsActionTypes.CLOSE_ADD_REPLICAS_MODAL)
+    ),
+    openDistributeJobsModal: (jobs: Job[]) => (
+        createAction(JobsActionTypes.OPEN_DISTRIBUTE_JOBS_MODAL, { jobs })
+    ),
+    closeDistributeJobsModal: () => (
+        createAction(JobsActionTypes.CLOSE_DISTRIBUTE_JOBS_MODAL)
     ),
 };
 
@@ -109,20 +125,33 @@ export const getJobPreviewAsync = (job: Job): ThunkAction => async (dispatch) =>
 };
 
 export const createJobAsync = (data: JobData): ThunkAction<Promise<Job>> => async (dispatch) => {
-    const initialData = {
-        type: data.type,
-        task_id: data.taskID,
-    };
+    const initialData = { type: data.type, task_id: data.taskID };
     const jobInstance = new cvat.classes.Job(initialData);
     try {
         const extras = {
             frame_selection_method: data.frameSelectionMethod,
-            seed: data.seed,
+            random_seed: data.randomSeed,
             frame_count: data.frameCount,
             frames_per_job_count: data.framesPerJobCount,
         };
         const savedJob = await jobInstance.save(extras);
         return savedJob;
+    } catch (error) {
+        dispatch(jobsActions.createJobFailed(error));
+        throw error;
+    }
+};
+
+export const createReplicaJobAsync = (
+    parentJob: Job,
+): ThunkAction<Promise<Job>> => async (dispatch) => {
+    const replicaInstance = new cvat.classes.Job({
+        type: JobType.REPLICA,
+        task_id: parentJob.taskId,
+    });
+
+    try {
+        return await replicaInstance.save({ parent_job_id: parentJob.id });
     } catch (error) {
         dispatch(jobsActions.createJobFailed(error));
         throw error;

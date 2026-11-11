@@ -4,12 +4,21 @@
 
 import datetime
 from contextlib import suppress
-from typing import Optional
 
+import rq
 from django.db.models import Min
+
+from cvat.apps.webhooks.exceptions import WebhookDeliveryError
 
 from .cache import clear_cache
 from .const import COMPRESSED_EVENT_SCOPES, MAX_EVENT_DURATION
+
+
+def should_skip_rq_exception_event_recording(rq_job: rq.job.Job, exc_value: Exception) -> bool:
+    if isinstance(exc_value, WebhookDeliveryError):
+        return rq_job.get_status(refresh=False) != rq.job.JobStatus.FAILED
+
+    return False
 
 
 def _prepare_objects_to_delete(object_to_delete):
@@ -123,10 +132,10 @@ def compute_working_time_per_ids(data: dict) -> dict:
 
 
 def find_minimal_date_for_filter(
-    job_id: Optional[str | int] = None,
-    task_id: Optional[str | int] = None,
-    project_id: Optional[str | int] = None,
-    org_id: Optional[str | int] = None,
+    job_id: str | int | None = None,
+    task_id: str | int | None = None,
+    project_id: str | int | None = None,
+    org_id: str | int | None = None,
 ) -> datetime.datetime:
     from cvat.apps.engine.models import Job, Project, Task
     from cvat.apps.organizations.models import Organization

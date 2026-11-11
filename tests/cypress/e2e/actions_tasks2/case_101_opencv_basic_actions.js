@@ -5,52 +5,43 @@
 
 /// <reference types="cypress" />
 
-import { generateString } from '../../support/utils';
+import * as allure from 'allure-js-commons';
+import { AllureTag } from '../../support/const_allure';
+
+import { clickCanvasImagePoint } from '../../support/utils.cy';
 
 context('OpenCV. Intelligent scissors. Histogram Equalization. TrackerMIL.', () => {
+    allure.tags(AllureTag.HEAVY, AllureTag.SETTINGS);
     const caseId = '101';
     const labelName = `Case ${caseId}`;
     const newLabel = `Case ${caseId}`;
     const createOpencvShape = {
         labelName,
         pointsMap: [
-            { x: 200, y: 200 },
-            { x: 250, y: 200 },
-            { x: 300, y: 250 },
-            { x: 350, y: 300 },
-            { x: 300, y: 350 },
+            { x: 696, y: 586 },
+            { x: 1131, y: 588 },
         ],
     };
     const createOpencvShapeSecondLabel = {
         labelName: newLabel,
         pointsMap: [
-            { x: 300, y: 200 },
-            { x: 350, y: 200 },
-            { x: 400, y: 250 },
-            { x: 450, y: 300 },
-            { x: 400, y: 350 },
+            { x: 1659, y: 674 },
+            { x: 2095, y: 678 },
         ],
         finishWithButton: true,
     };
 
     const createRectangleTrack2Points = {
-        points: 'By 2 Points',
+        points: '2 Points',
         type: 'Track',
-        firstX: 430,
+        firstX: 445,
         firstY: 40,
-        secondX: 640,
-        secondY: 145,
+        secondX: 650,
+        secondY: 175,
         labelName,
     };
 
     const keyCodeN = 78;
-    const pointsMap = [
-        { x: 300, y: 400 },
-        { x: 350, y: 500 },
-        { x: 400, y: 450 },
-        { x: 450, y: 500 },
-        { x: 400, y: 550 },
-    ];
 
     const taskName = `New annotation task for ${labelName}`;
     const attrName = `Attr for ${labelName}`;
@@ -59,7 +50,7 @@ context('OpenCV. Intelligent scissors. Histogram Equalization. TrackerMIL.', () 
     const imageFileName = `image_${labelName.replace(' ', '_').toLowerCase()}`;
     const width = 5000;
     const height = 5000;
-    const delta = 5;
+    const delta = 35;
     const step = 62.5;
     const maxTextWidth = undefined;
     const textHeightPx = 981.25;
@@ -93,6 +84,7 @@ context('OpenCV. Intelligent scissors. Histogram Equalization. TrackerMIL.', () 
     describe(`Testing case "${caseId}"`, () => {
         it('Load OpenCV.', () => {
             cy.interactOpenCVControlButton();
+            cy.hideTooltips(); // only appears on first interaction
             cy.get('.cvat-opencv-control-popover').within(() => {
                 cy.contains('OpenCV is loading').should('not.exist');
             });
@@ -111,28 +103,26 @@ context('OpenCV. Intelligent scissors. Histogram Equalization. TrackerMIL.', () 
         it('Change the number of points when the shape is drawn. Cancel drawing.', () => {
             cy.interactOpenCVControlButton();
             cy.get('.cvat-opencv-drawing-tool').click();
-            pointsMap.forEach((element) => {
-                cy.get('.cvat-canvas-container').click(element.x, element.y);
+            cy.get('.cvat-approx-poly-threshold-wrapper .ant-slider').click('center');
+            createOpencvShape.pointsMap.forEach((point) => {
+                clickCanvasImagePoint(point);
             });
             cy.get('.cvat_canvas_interact_intermediate_shape').then((intermediateShape) => {
                 // Get count of points
                 const intermediateShapeNumberPointsBeforeChange = intermediateShape.attr('points').split(' ').length;
-                // expected 7 to be above 5
-                expect(intermediateShapeNumberPointsBeforeChange).to.be.gt(pointsMap.length);
+                // Intermediate shape is expected to contain points added by the algorithm
+                expect(intermediateShapeNumberPointsBeforeChange).to.be.gt(createOpencvShape.pointsMap.length);
                 // Change number of points
-                cy.get('.cvat-approx-poly-threshold-wrapper')
-                    .find('[role="slider"]')
-                    .type(generateString(4, 'rightarrow'));
+                cy.get('.cvat-approx-poly-threshold-wrapper .ant-slider').click('right');
                 cy.get('.cvat_canvas_interact_intermediate_shape').then((_intermediateShape) => {
                     // Get count of points again
                     const intermediateShapeNumberPointsAfterChange = _intermediateShape.attr('points').split(' ').length;
-                    // expected 7 to be below 10
                     expect(intermediateShapeNumberPointsBeforeChange).to.be.lt(
                         intermediateShapeNumberPointsAfterChange,
                     );
                 });
             });
-            cy.get('.cvat-appearance-selected-opacity-slider').click('left');
+            cy.get('.cvat-appearance-selected-opacity-slider').type('{home}');
             cy.get('.cvat-appearance-selected-opacity-slider').find('[role="slider"]')
                 .then((sliderSelectedOpacityLeft) => {
                     const sliderSelectedOpacityValuenow = sliderSelectedOpacityLeft.attr('aria-valuenow');
@@ -142,7 +132,7 @@ context('OpenCV. Intelligent scissors. Histogram Equalization. TrackerMIL.', () 
                         sliderSelectedOpacityValuenow / 100,
                     );
                 });
-            cy.get('.cvat-appearance-selected-opacity-slider').click('right');
+            cy.get('.cvat-appearance-selected-opacity-slider').type('{end}');
             cy.get('.cvat-appearance-selected-opacity-slider')
                 .find('[role="slider"]')
                 .then((sliderSelectedOpacityRight) => {
@@ -156,34 +146,6 @@ context('OpenCV. Intelligent scissors. Histogram Equalization. TrackerMIL.', () 
             cy.get('body').type('{Esc}'); // Cancel drawing
             cy.get('.cvat_canvas_interact_intermediate_shape').should('not.exist');
             cy.get('.cvat_canvas_shape').should('have.length', 2);
-        });
-
-        it('Check "Intelligent scissors blocking feature". Cancel drawing.', () => {
-            cy.interactOpenCVControlButton();
-            cy.get('.cvat-opencv-drawing-tool').click();
-            cy.get('.cvat-annotation-header-block-tool-button').click();
-            cy.get('.cvat-annotation-header-block-tool-button').should('have.class', 'cvat-button-active');
-
-            pointsMap.forEach((element) => {
-                cy.get('.cvat-canvas-container').click(element.x, element.y);
-            });
-
-            cy.get('.cvat_canvas_interact_intermediate_shape').then((intermediateShape) => {
-                // The last point on the crosshair
-                expect(intermediateShape.attr('points').split(' ').length - 1).to.be.equal(pointsMap.length);
-            });
-
-            cy.get('.cvat-annotation-header-block-tool-button').click();
-            cy.get('.cvat-annotation-header-block-tool-button').should('not.have.class', 'cvat-button-active');
-            cy.get('.cvat-canvas-container').click(600, 600);
-
-            cy.get('.cvat_canvas_interact_intermediate_shape').then((intermediateShape) => {
-                // The last point on the crosshair
-                expect(intermediateShape.attr('points').split(' ').length).to.be.gt(pointsMap.length);
-            });
-
-            // Cancel drawing
-            cy.get('body').type('{Esc}');
         });
 
         it('Check "Histogram Equalization" feature.', () => {
@@ -204,7 +166,7 @@ context('OpenCV. Intelligent scissors. Histogram Equalization. TrackerMIL.', () 
         });
 
         // Waiting for fix https://github.com/openvinotoolkit/cvat/issues/3474
-        it.skip('Redraw the shape created with "Intelligent cissors".', () => {
+        it.skip('Redraw the shape created with "Intelligent scissors".', () => {
             cy.get('.cvat-canvas-container').click();
             cy.get('.cvat-opencv-control-popover').should('be.hidden');
             cy.get('#cvat_canvas_shape_1').trigger('mousemove');
@@ -222,7 +184,7 @@ context('OpenCV. Intelligent scissors. Histogram Equalization. TrackerMIL.', () 
 
         it('Create a shape with "TrackerMIL". Track it for several frames.', () => {
             cy.createRectangle(createRectangleTrack2Points);
-            // We will start testing tracking from 2nd frame because it's a bit unstable on inintialization
+            // We will start testing tracking from 2nd frame because it's a bit unstable on initialization
             cy.useOpenCVTracker({ tracker: 'TrackerMIL', targetFrame: 4 });
             cy.get('#cvat_canvas_shape_4')
                 .then((shape) => {

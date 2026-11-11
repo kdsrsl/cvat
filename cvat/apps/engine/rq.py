@@ -4,25 +4,30 @@
 
 from __future__ import annotations
 
+import traceback
 from abc import ABCMeta, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union
-from uuid import UUID
+from collections.abc import Callable
+from types import NoneType
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 import attrs
+import django_rq
 from django.conf import settings
 from django.db.models import Model
 from django.utils import timezone
-from django_rq.queues import DjangoRQ
+from django_rq.queues import DjangoRQ, get_redis_connection
+from redis.client import Pipeline
 from rq.job import Dependency as RQDependency
 from rq.job import Job as RQJob
 from rq.registry import BaseRegistry as RQBaseRegistry
 
-from cvat.apps.engine.types import ExtendedRequest
-
-from .models import RequestAction, RequestSubresource, RequestTarget
+from cvat.apps.engine.utils import take_by
+from cvat.apps.redis_handler.apps import SELECTOR_TO_QUEUE
+from cvat.apps.redis_handler.rq import RequestId, RequestIdWithOptionalSubresource
 
 if TYPE_CHECKING:
-    from django.contrib.auth.models import User
+    from cvat.apps.engine.types import ExtendedRequest
+    from cvat.apps.redis_handler.background import AbstractRequestManager
 
 
 class RQJobMetaField:
@@ -30,6 +35,9 @@ class RQJobMetaField:
         ID = "id"
         USERNAME = "username"
         EMAIL = "email"
+        FIRST_NAME = "first_name"
+        LAST_NAME = "last_name"
+        URL = "url"
 
     class RequestField:
         UUID = "uuid"
@@ -39,6 +47,7 @@ class RQJobMetaField:
     FORMATTED_EXCEPTION = "formatted_exception"
     EXCEPTION_TYPE = "exc_type"
     EXCEPTION_ARGS = "exc_args"
+
     # common fields
     REQUEST = "request"
     USER = "user"
@@ -49,12 +58,15 @@ class RQJobMetaField:
     JOB_ID = "job_id"
     STATUS = "status"
     PROGRESS = "progress"
-    # import fields
-    TMP_FILE = "tmp_file"
+    REQUEST_MANAGER_CLS = "request_manager_cls"
+
+    # import-specific fields
     TASK_PROGRESS = "task_progress"
-    # export fields
+
+    # export specific fields
     RESULT_URL = "result_url"
     RESULT_FILENAME = "result_filename"
+
     # lambda fields
     LAMBDA = "lambda"
     FUNCTION_ID = "function_id"
@@ -102,6 +114,9 @@ class UserMeta:
     id: int = ImmutableRQMetaAttribute(RQJobMetaField.UserField.ID)
     username: str = ImmutableRQMetaAttribute(RQJobMetaField.UserField.USERNAME)
     email: str = ImmutableRQMetaAttribute(RQJobMetaField.UserField.EMAIL)
+    first_name: str = ImmutableRQMetaAttribute(RQJobMetaField.UserField.FIRST_NAME)
+    last_name: str = ImmutableRQMetaAttribute(RQJobMetaField.UserField.LAST_NAME)
+    url: str = ImmutableRQMetaAttribute(RQJobMetaField.UserField.URL)
 
     def __init__(self, meta: dict[str, Any]) -> None:
         self._meta = meta
@@ -151,19 +166,21 @@ class AbstractRQMeta(metaclass=ABCMeta):
     def for_meta(cls, meta: dict[str, Any]):
         return cls(meta=meta)
 
-    def save(self) -> None:
+    def save(self, *, pipeline: Pipeline | None = None) -> None:
         assert isinstance(self._job, RQJob), "To save meta, rq job must be set"
-        self._job.save_meta()
+        # TODO: send PR to the upstream repo to support pipelines
+        meta = self._job.serializer.dumps(self._job.meta)
+        connection = pipeline if pipeline else self._job.connection
+        connection.hset(self._job.key, "meta", meta)
 
     @staticmethod
     @abstractmethod
     def _get_resettable_fields() -> list[str]:
         """Return a list of fields that must be reset on retry"""
 
-    def get_meta_on_retry(self) -> dict[str, Any]:
-        resettable_fields = self._get_resettable_fields()
-
-        return {k: v for k, v in self._meta.items() if k not in resettable_fields}
+    def reset_on_retry(self) -> None:
+        for field in self._get_resettable_fields():
+            self._meta.pop(field, None)
 
 
 class RQMetaWithFailureInfo(AbstractRQMeta):
@@ -192,6 +209,15 @@ class RQMetaWithFailureInfo(AbstractRQMeta):
         ]
 
 
+def save_job_failure_metadata(rq_job: RQJob, exc_type: type[Exception], exc_value: Exception):
+    rq_job_meta = RQMetaWithFailureInfo.for_job(rq_job)
+    rq_job_meta.formatted_exception = "".join(traceback.format_exception_only(exc_type, exc_value))
+    if rq_job.origin == settings.CVAT_QUEUES.CHUNKS.value:
+        rq_job_meta.exc_type = exc_type
+        rq_job_meta.exc_args = exc_value.args
+    rq_job_meta.save()
+
+
 class BaseRQMeta(RQMetaWithFailureInfo):
     # immutable fields
     # FUTURE-TODO: change to required fields when each enqueued job
@@ -200,8 +226,6 @@ class BaseRQMeta(RQMetaWithFailureInfo):
     # - [annotation queue] Some jobs may have no user/request info
     # - [chunks queue] Each job has no user/request info
     # - [import queue] Jobs running to cleanup uploaded files have no user/request info
-    # - [export queue] Jobs preparing events have no user/request info.
-    # - [export queue] Jobs running to cleanup csv files with events have no user/request info
 
     @property
     def user(self):
@@ -218,13 +242,21 @@ class BaseRQMeta(RQMetaWithFailureInfo):
         return None
 
     # immutable && optional fields
-    org_id: int | None = ImmutableRQMetaAttribute(RQJobMetaField.ORG_ID, optional=True)
-    org_slug: int | None = ImmutableRQMetaAttribute(RQJobMetaField.ORG_SLUG, optional=True)
     project_id: int | None = ImmutableRQMetaAttribute(RQJobMetaField.PROJECT_ID, optional=True)
     task_id: int | None = ImmutableRQMetaAttribute(RQJobMetaField.TASK_ID, optional=True)
     job_id: int | None = ImmutableRQMetaAttribute(RQJobMetaField.JOB_ID, optional=True)
+    request_manager_cls: str | None = ImmutableRQMetaAttribute(
+        RQJobMetaField.REQUEST_MANAGER_CLS,
+        optional=True,
+    )
 
     # mutable && optional fields
+    org_id: int | None = MutableRQMetaAttribute(
+        RQJobMetaField.ORG_ID, validator=lambda x: isinstance(x, int), optional=True
+    )
+    org_slug: int | None = MutableRQMetaAttribute(
+        RQJobMetaField.ORG_SLUG, validator=lambda x: isinstance(x, str), optional=True
+    )
     progress: float | None = MutableRQMetaAttribute(
         RQJobMetaField.PROGRESS, validator=lambda x: isinstance(x, float), optional=True
     )
@@ -244,36 +276,65 @@ class BaseRQMeta(RQMetaWithFailureInfo):
         cls,
         *,
         request: ExtendedRequest,
-        db_obj: Model | None,
-    ):
-        # to prevent circular import
-        from cvat.apps.events.handlers import job_id, organization_slug, task_id
-        from cvat.apps.webhooks.signals import organization_id, project_id
+        request_manager_cls: type[AbstractRequestManager],
+        organization_id: int | None,
+        organization_slug: str | None,
+        project_id: int | None,
+        task_id: int | None,
+        job_id: int | None,
+    ) -> dict:
+        from cvat.apps.events.handlers import get_serializer
 
-        oid = organization_id(db_obj)
-        oslug = organization_slug(db_obj)
-        pid = project_id(db_obj)
-        tid = task_id(db_obj)
-        jid = job_id(db_obj)
-
-        user: User = request.user
+        user_data = get_serializer(request.user).data
 
         return {
             RQJobMetaField.USER: {
-                RQJobMetaField.UserField.ID: user.pk,
-                RQJobMetaField.UserField.USERNAME: user.username,
-                RQJobMetaField.UserField.EMAIL: user.email,
+                RQJobMetaField.UserField.ID: user_data["id"],
+                RQJobMetaField.UserField.USERNAME: user_data["username"],
+                RQJobMetaField.UserField.EMAIL: request.user.email,
+                RQJobMetaField.UserField.FIRST_NAME: user_data["first_name"],
+                RQJobMetaField.UserField.LAST_NAME: user_data["last_name"],
+                RQJobMetaField.UserField.URL: user_data["url"],
             },
             RQJobMetaField.REQUEST: {
                 RQJobMetaField.RequestField.UUID: request.uuid,
                 RQJobMetaField.RequestField.TIMESTAMP: timezone.now(),
             },
-            RQJobMetaField.ORG_ID: oid,
-            RQJobMetaField.ORG_SLUG: oslug,
-            RQJobMetaField.PROJECT_ID: pid,
-            RQJobMetaField.TASK_ID: tid,
-            RQJobMetaField.JOB_ID: jid,
+            RQJobMetaField.ORG_ID: organization_id,
+            RQJobMetaField.ORG_SLUG: organization_slug,
+            RQJobMetaField.PROJECT_ID: project_id,
+            RQJobMetaField.TASK_ID: task_id,
+            RQJobMetaField.JOB_ID: job_id,
+            RQJobMetaField.REQUEST_MANAGER_CLS: (
+                f"{request_manager_cls.__module__}.{request_manager_cls.__qualname__}"
+            ),
         }
+
+    @classmethod
+    def build_from_instance(
+        cls,
+        request: ExtendedRequest,
+        request_manager_cls: type[AbstractRequestManager],
+        instance: Model | None,
+    ) -> dict:
+        # to prevent circular import
+        from cvat.apps.events.handlers import (
+            job_id,
+            organization_id,
+            organization_slug,
+            project_id,
+            task_id,
+        )
+
+        return cls.build(
+            request=request,
+            organization_id=organization_id(instance),
+            organization_slug=organization_slug(instance),
+            project_id=project_id(instance),
+            task_id=task_id(instance),
+            job_id=job_id(instance),
+            request_manager_cls=request_manager_cls,
+        )
 
 
 class ExportRQMeta(BaseRQMeta):
@@ -283,21 +344,21 @@ class ExportRQMeta(BaseRQMeta):
     )
     result_filename: str = ImmutableRQMetaAttribute(RQJobMetaField.RESULT_FILENAME)
 
-    @staticmethod
-    def _get_resettable_fields() -> list[str]:
-        base_fields = BaseRQMeta._get_resettable_fields()
-        return base_fields + [RQJobMetaField.RESULT_URL, RQJobMetaField.RESULT_FILENAME]
-
     @classmethod
     def build_for(
         cls,
         *,
         request: ExtendedRequest,
-        db_obj: Model,
+        request_manager_cls: type[AbstractRequestManager],
+        instance: Model,
         result_url: str | None,
         result_filename: str,
     ):
-        base_meta = BaseRQMeta.build(request=request, db_obj=db_obj)
+        base_meta = BaseRQMeta.build_from_instance(
+            request=request,
+            instance=instance,
+            request_manager_cls=request_manager_cls,
+        )
 
         return {
             **base_meta,
@@ -307,11 +368,6 @@ class ExportRQMeta(BaseRQMeta):
 
 
 class ImportRQMeta(BaseRQMeta):
-    # immutable && optional fields
-    tmp_file: str | None = ImmutableRQMetaAttribute(
-        RQJobMetaField.TMP_FILE, optional=True
-    )  # used only when importing annotations|datasets|backups
-
     # mutable fields
     task_progress: float | None = MutableRQMetaAttribute(
         RQJobMetaField.TASK_PROGRESS, validator=lambda x: isinstance(x, float), optional=True
@@ -323,18 +379,6 @@ class ImportRQMeta(BaseRQMeta):
 
         return base_fields + [RQJobMetaField.TASK_PROGRESS]
 
-    @classmethod
-    def build_for(
-        cls,
-        *,
-        request: ExtendedRequest,
-        db_obj: Model | None,
-        tmp_file: str | None = None,
-    ):
-        base_meta = BaseRQMeta.build(request=request, db_obj=db_obj)
-
-        return {**base_meta, RQJobMetaField.TMP_FILE: tmp_file}
-
 
 def is_rq_job_owner(rq_job: RQJob, user_id: int) -> bool:
     if user := BaseRQMeta.for_job(rq_job).user:
@@ -343,118 +387,55 @@ def is_rq_job_owner(rq_job: RQJob, user_id: int) -> bool:
     return False
 
 
-@attrs.frozen()
-class RQId:
-    action: RequestAction = attrs.field(validator=attrs.validators.instance_of(RequestAction))
-    target: RequestTarget = attrs.field(validator=attrs.validators.instance_of(RequestTarget))
-    identifier: Union[int, UUID] = attrs.field(validator=attrs.validators.instance_of((int, UUID)))
-    subresource: Optional[RequestSubresource] = attrs.field(
-        validator=attrs.validators.optional(attrs.validators.instance_of(RequestSubresource)),
-        kw_only=True,
-        default=None,
-    )
-    user_id: Optional[int] = attrs.field(
-        validator=attrs.validators.optional(attrs.validators.instance_of(int)),
-        kw_only=True,
-        default=None,
-    )
-    format: Optional[str] = attrs.field(
-        validator=attrs.validators.optional(attrs.validators.instance_of(str)),
-        kw_only=True,
-        default=None,
+@attrs.frozen(kw_only=True, slots=False)
+class RequestIdWithOptionalFormat(RequestId):
+    format: str | None = attrs.field(
+        validator=attrs.validators.instance_of((str, NoneType)), default=None
     )
 
-    _OPTIONAL_FIELD_REQUIREMENTS = {
-        RequestAction.AUTOANNOTATE: {"subresource": False, "format": False, "user_id": False},
-        RequestAction.CREATE: {"subresource": False, "format": False, "user_id": False},
-        RequestAction.EXPORT: {"subresource": True, "user_id": True},
-        RequestAction.IMPORT: {"subresource": True, "format": False, "user_id": False},
-    }
 
-    def __attrs_post_init__(self) -> None:
-        for field, req in self._OPTIONAL_FIELD_REQUIREMENTS[self.action].items():
-            if req:
-                if getattr(self, field) is None:
-                    raise ValueError(f"{field} is required for the {self.action} action")
-            else:
-                if getattr(self, field) is not None:
-                    raise ValueError(f"{field} is not allowed for the {self.action} action")
+@attrs.frozen(kw_only=True, slots=False)
+class RequestIdWithOptionalLightweight(RequestId):
+    lightweight: bool | None = attrs.field(
+        converter=lambda x: x if x is None else bool(x), default=None
+    )
 
-    # RQ ID templates:
-    # autoannotate:task-<tid>
-    # import:<task|project|job>-<id|uuid>-<annotations|dataset|backup>
-    # create:task-<tid>
-    # export:<project|task|job>-<id>-<annotations|dataset>-in-<format>-format-by-<user_id>
-    # export:<project|task>-<id>-backup-by-<user_id>
 
-    def render(
-        self,
-    ) -> str:
-        common_prefix = f"{self.action}:{self.target}-{self.identifier}"
+@attrs.frozen(kw_only=True, slots=False)
+class ExportRequestId(
+    RequestIdWithOptionalSubresource,  # subresource is optional because export queue works also with events
+    RequestIdWithOptionalFormat,
+    RequestIdWithOptionalLightweight,
+):
+    ACTION_DEFAULT_VALUE: ClassVar[str] = "export"
+    ACTION_ALLOWED_VALUES: ClassVar[tuple[str]] = (ACTION_DEFAULT_VALUE,)
 
-        if RequestAction.IMPORT == self.action:
-            return f"{common_prefix}-{self.subresource}"
-        elif RequestAction.EXPORT == self.action:
-            if self.format is None:
-                return f"{common_prefix}-{self.subresource}-by-{self.user_id}"
+    SUBRESOURCE_ALLOWED_VALUES: ClassVar[tuple[str]] = ("backup", "dataset", "annotations")
+    QUEUE_SELECTORS: ClassVar[tuple[str]] = ACTION_ALLOWED_VALUES
 
-            format_to_be_used_in_urls = self.format.replace(" ", "_").replace(".", "@")
-            return f"{common_prefix}-{self.subresource}-in-{format_to_be_used_in_urls}-format-by-{self.user_id}"
-        elif self.action in {RequestAction.CREATE, RequestAction.AUTOANNOTATE}:
-            return common_prefix
-        else:
-            assert False, f"Unsupported action {self.action!r} was found"
+    # will be deleted after several releases
+    LEGACY_FORMAT_PATTERNS: ClassVar[tuple[str]] = (
+        r"export:(?P<target>(task|project))-(?P<target_id>\d+)-(?P<subresource>backup)-by-(?P<user_id>\d+)",
+        r"export:(?P<target>(project|task|job))-(?P<target_id>\d+)-(?P<subresource>(annotations|dataset))"
+        + r"-in-(?P<format>[\w@]+)-format-by-(?P<user_id>\d+)",
+    )
 
-    @staticmethod
-    def parse(rq_id: str) -> RQId:
-        identifier: Optional[Union[UUID, int]] = None
-        subresource: Optional[RequestSubresource] = None
-        user_id: Optional[int] = None
-        anno_format: Optional[str] = None
 
-        try:
-            action_and_resource, unparsed = rq_id.split("-", maxsplit=1)
-            action_str, target_str = action_and_resource.split(":")
-            action = RequestAction(action_str)
-            target = RequestTarget(target_str)
+@attrs.frozen(kw_only=True, slots=False)
+class ImportRequestId(
+    RequestIdWithOptionalSubresource,  # subresource is optional because import queue works also with task creation jobs
+    RequestIdWithOptionalFormat,
+):
+    ACTION_ALLOWED_VALUES: ClassVar[tuple[str]] = ("create", "import")
+    SUBRESOURCE_ALLOWED_VALUES: ClassVar[tuple[str]] = ("backup", "dataset", "annotations")
+    QUEUE_SELECTORS: ClassVar[tuple[str]] = ACTION_ALLOWED_VALUES
 
-            if action in {RequestAction.CREATE, RequestAction.AUTOANNOTATE}:
-                identifier = unparsed
-            elif RequestAction.IMPORT == action:
-                identifier, subresource_str = unparsed.rsplit("-", maxsplit=1)
-                subresource = RequestSubresource(subresource_str)
-            else:  # action == export
-                identifier, subresource_str, unparsed = unparsed.split("-", maxsplit=2)
-                subresource = RequestSubresource(subresource_str)
-
-                if RequestSubresource.BACKUP == subresource:
-                    _, user_id = unparsed.split("-")
-                else:
-                    unparsed, _, user_id = unparsed.rsplit("-", maxsplit=2)
-                    # remove prefix(in-), suffix(-format) and restore original format name
-                    # by replacing special symbols: "_" -> " ", "@" -> "."
-                    anno_format = unparsed[3:-7].replace("_", " ").replace("@", ".")
-
-            if identifier is not None:
-                if identifier.isdigit():
-                    identifier = int(identifier)
-                else:
-                    identifier = UUID(identifier)
-
-            if user_id is not None:
-                user_id = int(user_id)
-
-            return RQId(
-                action=action,
-                target=target,
-                identifier=identifier,
-                subresource=subresource,
-                user_id=user_id,
-                format=anno_format,
-            )
-
-        except Exception as ex:
-            raise ValueError(f"The {rq_id!r} RQ ID cannot be parsed: {str(ex)}") from ex
+    # will be deleted after several releases
+    LEGACY_FORMAT_PATTERNS = (
+        r"(?P<action>create):(?P<target>task)-(?P<target_id>\d+)",
+        r"(?P<action>import):(?P<target>(task|project|job))-(?P<target_id>\d+)-(?P<subresource>(annotations|dataset))",
+        r"(?P<action>import):(?P<target>(task|project))-(?P<id>[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})-(?P<subresource>backup)",
+    )
 
 
 def define_dependent_job(
@@ -462,7 +443,7 @@ def define_dependent_job(
     user_id: int,
     should_be_dependent: bool = settings.ONE_RUNNING_JOB_IN_QUEUE_PER_USER,
     *,
-    rq_id: Optional[str] = None,
+    rq_id: str | None = None,
 ) -> RQDependency:
     if not should_be_dependent:
         return None
@@ -471,12 +452,18 @@ def define_dependent_job(
         queue.deferred_job_registry,
         queue,
         queue.started_job_registry,
+        queue.scheduled_job_registry,
     ]
     # Since there is no cleanup implementation in DeferredJobRegistry,
     # this registry can contain "outdated" jobs that weren't deleted from it
     # but were added to another registry. Probably such situations can occur
     # if there are active or deferred jobs when restarting the worker container.
-    filters = [lambda job: job.is_deferred, lambda _: True, lambda _: True]
+    filters = [
+        lambda job: job.is_deferred,
+        lambda _: True,
+        lambda _: True,
+        lambda job: job.is_scheduled,
+    ]
     all_user_jobs: list[RQJob] = []
     for q, f in zip(queues, filters):
         job_ids = q.get_job_ids()
@@ -512,3 +499,72 @@ def define_dependent_job(
         if all_user_jobs
         else None
     )
+
+
+class RunningBackgroundProcessesError(Exception):
+    def __init__(self, queue_name: str, *args):
+        self.queue_name = queue_name
+        super().__init__(*args)
+
+
+def update_org_related_data_in_rq_jobs(
+    new_org_id: int | None,
+    new_org_slug: str | None,
+    *,
+    project_id: int | None = None,
+    task_id: int | None = None,
+):
+    def is_rq_job_related(job_meta: BaseRQMeta):
+        return (
+            project_id
+            and job_meta.project_id == project_id
+            or task_id
+            and job_meta.task_id == task_id
+        )
+
+    assert (project_id or task_id) and not (project_id and task_id)
+
+    queues: list[django_rq.queues.DjangoRQ] = [
+        django_rq.get_queue(queue_name) for queue_name in set(SELECTOR_TO_QUEUE.values())
+    ]
+
+    # prohibit moving resources if there is at least one
+    # running background job related to the resource
+    for queue in queues:
+        job_ids = set(
+            queue.get_job_ids()
+            + queue.deferred_job_registry.get_job_ids()
+            + queue.started_job_registry.get_job_ids()
+        )
+        for batched_job_ids in take_by(job_ids, chunk_size=1000):
+            for job in queue.job_class.fetch_many(batched_job_ids, queue.connection):
+                if not job:
+                    continue
+
+                if is_rq_job_related(BaseRQMeta.for_job(job)):
+                    raise RunningBackgroundProcessesError(queue_name=queue.name)
+
+    conn = get_redis_connection(settings.REDIS_INMEM_SETTINGS)
+    with conn.pipeline() as pipe:
+        for queue in queues:
+            job_ids = set(
+                queue.finished_job_registry.get_job_ids() + queue.failed_job_registry.get_job_ids()
+            )
+
+            for batched_job_ids in take_by(job_ids, chunk_size=1000):
+                for job in queue.job_class.fetch_many(batched_job_ids, queue.connection):
+                    if not job:
+                        continue
+
+                    job_meta = BaseRQMeta.for_job(job)
+
+                    if not is_rq_job_related(job_meta):
+                        continue
+
+                    job_meta.org_id = new_org_id
+                    job_meta.org_slug = new_org_slug
+                    job_meta.save(pipeline=pipe)
+
+        # FUTURE-TODO: probably need to move it into a background process
+        # and update RQ jobs in batches with rollback support.
+        pipe.execute()  # it handles empty pipe.command_stack too

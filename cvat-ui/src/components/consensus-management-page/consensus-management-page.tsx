@@ -143,7 +143,6 @@ function ConsensusManagementPage(): JSX.Element {
         try {
             const { settings } = state.consensusSettings;
             if (settings) {
-                settings.quorum = values.quorum / 100;
                 settings.iouThreshold = values.iouThreshold / 100;
 
                 try {
@@ -162,7 +161,7 @@ function ConsensusManagementPage(): JSX.Element {
                 }
             }
             return settings;
-        } catch (e) {
+        } catch (_e) {
             return false;
         }
     }, [state.consensusSettings.settings]);
@@ -261,7 +260,7 @@ function ConsensusManagementPage(): JSX.Element {
                 activeKey={activeTab}
                 defaultActiveKey={DEFAULT_TAB}
                 onChange={onTabKeyChange}
-                className='cvat-task-control-tabs'
+                className='cvat-consensus-management-page-tabs'
                 items={tabsItems}
             />
         );

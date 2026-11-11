@@ -7,13 +7,15 @@ import _ from 'lodash';
 import { AnyAction } from 'redux';
 import { ThunkAction } from 'utils/redux';
 import {
-    GridColor, ColorBy, SettingsState, ToolsBlockerState,
+    GridColor, ColorBy, SettingsState,
     CombinedState,
 } from 'reducers';
 import { OrientationVisibility } from 'cvat-canvas3d-wrapper';
-import { ImageFilter, ImageFilterAlias, SerializedImageFilter } from 'utils/image-processing';
-import { conflict, conflictDetector } from 'utils/conflict-detector';
-import GammaCorrection, { GammaFilterOptions } from 'utils/fabric-wrapper/gamma-correciton';
+import { SerializedImageFilter } from 'cvat-core-wrapper';
+import { ImageFilter, ImageFilterAlias } from 'utils/image-processing';
+import GammaCorrection, { GammaFilterOptions } from 'utils/fabric-wrapper/gamma-correction';
+import { resolveConflicts } from 'utils/conflict-detector';
+import { migrateShortcutsSettings, SHORTCUTS_SETTINGS_VERSION } from 'utils/shortcuts-migration';
 import { shortcutsActions } from './shortcuts-actions';
 
 export enum SettingsActionTypes {
@@ -37,21 +39,23 @@ export enum SettingsActionTypes {
     SWITCH_CONTROL_POINTS_SIZE = 'SWITCH_CONTROL_POINTS_SIZE',
     SWITCH_TEXT_POSITION = 'SWITCH_TEXT_POSITION',
     SWITCH_TEXT_CONTENT = 'SWITCH_TEXT_CONTENT',
+    SWITCH_SHOWING_CONFLICT_REQUIREMENTS = 'SWITCH_SHOWING_CONFLICT_REQUIREMENTS',
     CHANGE_BRIGHTNESS_LEVEL = 'CHANGE_BRIGHTNESS_LEVEL',
     CHANGE_CONTRAST_LEVEL = 'CHANGE_CONTRAST_LEVEL',
     CHANGE_SATURATION_LEVEL = 'CHANGE_SATURATION_LEVEL',
     SWITCH_AUTO_SAVE = 'SWITCH_AUTO_SAVE',
     CHANGE_AUTO_SAVE_INTERVAL = 'CHANGE_AUTO_SAVE_INTERVAL',
-    CHANGE_AAM_ZOOM_MARGIN = 'CHANGE_AAM_ZOOM_MARGIN',
+    CHANGE_FOCUSED_OBJECT_PADDING = 'CHANGE_FOCUSED_OBJECT_PADDING',
     CHANGE_DEFAULT_APPROX_POLY_THRESHOLD = 'CHANGE_DEFAULT_APPROX_POLY_THRESHOLD',
     SWITCH_AUTOMATIC_BORDERING = 'SWITCH_AUTOMATIC_BORDERING',
+    SWITCH_SNAP_TO_POINT = 'SWITCH_SNAP_TO_POINT',
+    SWITCH_ADAPTIVE_ZOOM = 'SWITCH_ADAPTIVE_ZOOM',
     SWITCH_INTELLIGENT_POLYGON_CROP = 'SWITCH_INTELLIGENT_POLYGON_CROP',
     SWITCH_SHOWNIG_INTERPOLATED_TRACKS = 'SWITCH_SHOWNIG_INTERPOLATED_TRACKS',
     SWITCH_SHOWING_OBJECTS_TEXT_ALWAYS = 'SWITCH_SHOWING_OBJECTS_TEXT_ALWAYS',
     CHANGE_CANVAS_BACKGROUND_COLOR = 'CHANGE_CANVAS_BACKGROUND_COLOR',
     SWITCH_SETTINGS_DIALOG = 'SWITCH_SETTINGS_DIALOG',
     SET_SETTINGS = 'SET_SETTINGS',
-    SWITCH_TOOLS_BLOCKER_STATE = 'SWITCH_TOOLS_BLOCKER_STATE',
     SWITCH_SHOWING_DELETED_FRAMES = 'SWITCH_SHOWING_DELETED_FRAMES',
     SWITCH_SHOWING_TAGS_ON_FRAME = 'SWITCH_SHOWING_TAGS_ON_FRAME',
     ENABLE_IMAGE_FILTER = 'ENABLE_IMAGE_FILTER',
@@ -250,6 +254,15 @@ export function switchTextContent(textContent: string[]): AnyAction {
     };
 }
 
+export function switchShowingConflictRequirements(showConflictRequirements: boolean): AnyAction {
+    return {
+        type: SettingsActionTypes.SWITCH_SHOWING_CONFLICT_REQUIREMENTS,
+        payload: {
+            showConflictRequirements,
+        },
+    };
+}
+
 export function changeBrightnessLevel(level: number): AnyAction {
     return {
         type: SettingsActionTypes.CHANGE_BRIGHTNESS_LEVEL,
@@ -295,11 +308,11 @@ export function changeAutoSaveInterval(autoSaveInterval: number): AnyAction {
     };
 }
 
-export function changeAAMZoomMargin(aamZoomMargin: number): AnyAction {
+export function changeFocusedObjectPadding(focusedObjectPadding: number): AnyAction {
     return {
-        type: SettingsActionTypes.CHANGE_AAM_ZOOM_MARGIN,
+        type: SettingsActionTypes.CHANGE_FOCUSED_OBJECT_PADDING,
         payload: {
-            aamZoomMargin,
+            focusedObjectPadding,
         },
     };
 }
@@ -327,6 +340,24 @@ export function switchAutomaticBordering(automaticBordering: boolean): AnyAction
         type: SettingsActionTypes.SWITCH_AUTOMATIC_BORDERING,
         payload: {
             automaticBordering,
+        },
+    };
+}
+
+export function switchSnapToPoint(snapToPoint: boolean): AnyAction {
+    return {
+        type: SettingsActionTypes.SWITCH_SNAP_TO_POINT,
+        payload: {
+            snapToPoint,
+        },
+    };
+}
+
+export function switchAdaptiveZoom(adaptiveZoom: boolean): AnyAction {
+    return {
+        type: SettingsActionTypes.SWITCH_ADAPTIVE_ZOOM,
+        payload: {
+            adaptiveZoom,
         },
     };
 }
@@ -361,15 +392,6 @@ export function changeDefaultApproxPolyAccuracy(approxPolyAccuracy: number): Any
         type: SettingsActionTypes.CHANGE_DEFAULT_APPROX_POLY_THRESHOLD,
         payload: {
             approxPolyAccuracy,
-        },
-    };
-}
-
-export function switchToolsBlockerState(toolsBlockerState: ToolsBlockerState): AnyAction {
-    return {
-        type: SettingsActionTypes.SWITCH_TOOLS_BLOCKER_STATE,
-        payload: {
-            toolsBlockerState,
         },
     };
 }
@@ -445,20 +467,19 @@ export function restoreSettingsAsync(): ThunkAction {
         } as Pick<SettingsState, 'player' | 'workspace' | 'imageFilters'>;
 
         Object.entries(_.pick(newSettings, ['player', 'workspace'])).forEach(([sectionKey, section]) => {
-            for (const key of Object.keys(section)) {
-                const settedValue = loadedSettings[sectionKey]?.[key];
-                if (settedValue !== undefined) {
-                    Object.defineProperty(newSettings[sectionKey as 'player' | 'workspace'], key, { value: settedValue });
+            Object.keys(section).forEach((key) => {
+                const setValue = loadedSettings[sectionKey]?.[key];
+                if (setValue !== undefined) {
+                    Object.defineProperty(newSettings[sectionKey as 'player' | 'workspace'], key, { value: setValue });
                 }
-            }
+            });
         });
 
         if ('imageFilters' in loadedSettings) {
             loadedSettings.imageFilters.forEach((filter: SerializedImageFilter) => {
                 if (filter.alias === ImageFilterAlias.GAMMA_CORRECTION) {
-                    const modifier = new GammaCorrection(filter.params as GammaFilterOptions);
                     newSettings.imageFilters.push({
-                        modifier,
+                        modifier: new GammaCorrection(filter.params as GammaFilterOptions),
                         alias: ImageFilterAlias.GAMMA_CORRECTION,
                     });
                 }
@@ -468,35 +489,23 @@ export function restoreSettingsAsync(): ThunkAction {
         dispatch(setSettings(newSettings));
 
         if ('shortcuts' in loadedSettings) {
+            const migratedShortcuts = migrateShortcutsSettings(loadedSettings.shortcuts);
+            if (migratedShortcuts) {
+                loadedSettings.shortcuts = migratedShortcuts;
+                localStorage.setItem('clientSettings', JSON.stringify(loadedSettings));
+            }
+
             const updateKeyMap = structuredClone(shortcuts.keyMap);
-            for (const [key, value] of Object.entries(loadedSettings.shortcuts.keyMap)) {
+
+            Object.entries(loadedSettings.shortcuts.keyMap).forEach(([key, value]) => {
                 if (key in updateKeyMap) {
                     updateKeyMap[key].sequences = (value as { sequences: string[] }).sequences;
                 }
-            }
+            });
 
-            for (const key of Object.keys(updateKeyMap)) {
-                const currValue = {
-                    [key]: { ...updateKeyMap[key] },
-                };
-                const conflictingShortcuts = conflictDetector(currValue, shortcuts.keyMap);
-                if (conflictingShortcuts) {
-                    for (const conflictingShortcut of Object.keys(conflictingShortcuts)) {
-                        for (const sequence of currValue[key].sequences) {
-                            for (const conflictingSequence of conflictingShortcuts[conflictingShortcut].sequences) {
-                                if (conflict(sequence, conflictingSequence)) {
-                                    updateKeyMap[conflictingShortcut].sequences = [
-                                        ...updateKeyMap[conflictingShortcut].sequences.filter(
-                                            (s: string) => s !== conflictingSequence,
-                                        ),
-                                    ];
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            dispatch(shortcutsActions.registerShortcuts(updateKeyMap));
+            const resolvedKeyMap = resolveConflicts(updateKeyMap, shortcuts.keyMap);
+
+            dispatch(shortcutsActions.registerShortcuts(resolvedKeyMap));
         }
     };
 }
@@ -507,6 +516,7 @@ export function updateCachedSettings(settings: CombinedState['settings'], shortc
         player: settings.player,
         workspace: settings.workspace,
         shortcuts: {
+            version: SHORTCUTS_SETTINGS_VERSION,
             keyMap: Object.entries(shortcuts.keyMap).reduce<Record<string, { sequences: string[] }>>(
                 (acc, [key, value]) => {
                     if (key in shortcuts.defaultState) {
