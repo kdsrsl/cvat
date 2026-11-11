@@ -1,5 +1,5 @@
-#ARG PIP_VERSION=24.0
-ARG BASE_IMAGE=ubuntu:24.04
+ARG PIP_VERSION=24.0
+ARG BASE_IMAGE=ubuntu:22.04
 
 FROM ${BASE_IMAGE} AS build-image-base
 
@@ -21,17 +21,13 @@ RUN apt-get update && \
         libxmlsec1-dev \
         libxmlsec1-openssl \
         libhdf5-dev \
-        cargo-1.85 \
-    && update-alternatives \
-        --install /usr/bin/rustc rustc /usr/bin/rustc-1.85 185 \
-        --slave /usr/bin/cargo cargo /usr/bin/cargo-1.85 \
+        cargo \
     && rm -rf /var/lib/apt/lists/*
 
-#ARG PIP_VERSION
+ARG PIP_VERSION
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN --mount=type=cache,target=/root/.cache/pip/http \
-    python3 -m pip install -U pip setuptools wheel -i https://pypi.tuna.tsinghua.edu.cn/simple
-#    python3 -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
+    python3 -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 国内pip方式1
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
@@ -42,9 +38,8 @@ RUN mkdir -p /root/.pip && \
 
 RUN cargo --version
 RUN rustc --version
-#RUN rustup --version
-#RUN where rustup
-#RUN where cargo
+#RUN which rustup
+#RUN which cargo
 
 # We build OpenH264, FFmpeg and PyAV in a separate build stage,
 # because this way Docker can do it in parallel to all the other packages.
@@ -159,7 +154,6 @@ ENV DJANGO_SETTINGS_MODULE="cvat.settings.${CVAT_CONFIGURATION}"
 # Install necessary apt packages
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get --no-install-recommends install -yq \
-        adduser \
         bzip2 \
         ca-certificates \
         curl \
@@ -167,7 +161,7 @@ RUN apt-get update && \
         libgeos-c1v5 \
         libgl1 \
         libgomp1 \
-        libldap2 \
+        libldap-2.5-0 \
         libpython3.10 \
         libsasl2-2 \
         libxml2 \
@@ -192,11 +186,8 @@ COPY --from=build-smokescreen /tmp/smokescreen /usr/local/bin/smokescreen
 
 # Add a non-root user
 ENV USER=${USER}
-#ENV HOME /home/${USER}
-#RUN adduser --shell /bin/bash --disabled-password --gecos "" ${USER}
-RUN deluser --remove-home ubuntu && \
-    adduser --uid=1000 --shell /bin/bash --disabled-password --gecos "" ${USER}
-ENV CVAT_BASE_DIR=/home/${USER}
+ENV HOME /home/${USER}
+RUN adduser --shell /bin/bash --disabled-password --gecos "" ${USER}
 
 ARG CLAM_AV="no"
 RUN if [ "$CLAM_AV" = "yes" ]; then \
@@ -217,10 +208,10 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # setuptools should be uninstalled after updating google-cloud-storage
 # https://github.com/googleapis/python-storage/issues/740
 RUN python -m pip install --upgrade setuptools -i https://pypi.tuna.tsinghua.edu.cn/simple
-#ARG PIP_VERSION
+ARG PIP_VERSION
 ARG PIP_DISABLE_PIP_VERSION_CHECK=1
 
-#RUN python -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN python -m pip install -U pip==${PIP_VERSION} -i https://pypi.tuna.tsinghua.edu.cn/simple
 RUN --mount=type=bind,from=build-image,source=/tmp/wheelhouse,target=/mnt/wheelhouse \
     --mount=type=bind,from=build-image-av,source=/tmp/wheelhouse,target=/mnt/wheelhouse-av \
     python -m pip install --no-index /mnt/wheelhouse/*.whl /mnt/wheelhouse-av/*.whl
