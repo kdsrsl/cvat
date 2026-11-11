@@ -41,7 +41,7 @@ RUN mkdir -p /root/.pip && \
 
 RUN cargo --version
 RUN rustc --version
-RUN rustup --version
+#RUN rustup --version
 #RUN where rustup
 #RUN where cargo
 
