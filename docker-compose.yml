@@ -423,28 +423,28 @@ volumes:
   cvat_db:
     driver_opts:
       type: none
-      device: /mnt/cvat_share/db
+      device: /mnt/cvat_share26/db
       o: bind
   cvat_data:
     driver_opts:
       type: none
-      device: /mnt/cvat_share/data
+      device: /mnt/cvat_share26/data
       o: bind
   cvat_keys:
     driver_opts:
       type: none
-      device: /mnt/cvat_share/keys
+      device: /mnt/cvat_share26/keys
       o: bind
   cvat_logs:
     driver_opts:
       type: none
-      device: /mnt/cvat_share/logs
+      device: /mnt/cvat_share26/logs
       o: bind
   cvat_inmem_db:
   cvat_events_db:
     driver_opts:
       type: none
-      device: /mnt/cvat_share/events_db
+      device: /mnt/cvat_share26/events_db
       o: bind
   cvat_cache_db:
 
