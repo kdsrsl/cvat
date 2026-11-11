@@ -54,18 +54,10 @@ const DEFAULT_AWS_S3_REGIONS: string[][] = [
 
 const SERVER_UNAVAILABLE_COMPONENT = (
     <>
-        Make sure the CVAT backend and all necessary services
+        Make sure the IAT backend and all necessary services
         (Database, Redis and Open Policy Agent) are running and available.
-        If you upgraded from version 2.2.0 or earlier, manual actions may be needed,
-        see the&nbsp;
-        <a
-            target='_blank'
-            rel='noopener noreferrer'
-            href={UPGRADE_GUIDE_URL}
-        >
-            Upgrade Guide
-        </a>
-        .
+        If you upgraded from version 18.0.0 or earlier, manual actions may be needed,
+        see the Inner Upgrade Guide.
     </>
 );
 
