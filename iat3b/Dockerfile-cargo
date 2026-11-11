@@ -1,0 +1,40 @@
+# 基于 Ubuntu 22.04，安装 Rust / Cargo 1.85 工具链
+FROM ubuntu:22.04
+
+# 避免 apt 安装时弹出交互提示
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Rust 工具链版本（Cargo 随 Rust 一同安装，即 cargo 1.85.0）
+ARG RUST_VERSION=1.85.0
+
+# 安装到全局目录，任何用户都可以直接使用
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+# 基础依赖：
+#   ca-certificates、curl  —— 下载 rustup
+#   build-essential        —— 链接 Rust 程序所需的 C 工具链（gcc、make 等）
+#   pkg-config、libssl-dev —— 编译常见 crate（如 openssl-sys）所需
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        build-essential \
+        pkg-config \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 通过 rustup 安装固定版本的工具链
+#   --profile minimal    仅安装 rustc、cargo、rust-std
+#   --no-modify-path     不修改 shell 配置文件，路径由上面的 ENV 提供
+#   chmod -R a+w         允许任意 UID 使用（如以非 root 用户运行容器）
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}" \
+    && chmod -R a+w "${CARGO_HOME}" "${RUSTUP_HOME}" \
+    && rustc --version \
+    && cargo --version
+
+WORKDIR /workspace
+
+CMD ["bash"]
