@@ -36,7 +36,8 @@ x-clickhouse-env: &clickhouse-env
 services:
   cvat_db:
     container_name: cvat_db
-    image: postgres:15-alpine
+    #image: postgres:15-alpine
+    image: acc286cc12c5
     restart: always
     build:
       context: .
